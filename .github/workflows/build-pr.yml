@@ -1,26 +1,19 @@
-name: Build Pull Request
+name: Build Windows CLAP (PR)
+
 on:
   pull_request:
+  workflow_dispatch:
 
-defaults:
-  run:
-    shell: bash
+permissions:
+  contents: read
 
 jobs:
-  build_plugin:
-    name: PR - ${{ matrix.os }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        include:
-          - os: windows-latest
-            build_script: win-build.sh
-
-          - os: macos-latest
-            build_script: mac-build.sh
-
-          - os: ubuntu-latest
-            build_script: linux-build.sh
+  build-windows-clap:
+    name: Windows CLAP
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
 
     steps:
       - name: Checkout code
@@ -28,17 +21,24 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Prepare for JUCE
-        uses: surge-synthesizer/sst-githubactions/prepare-for-juce@main
-        with:
-          os: ${{ runner.os }}
-
-      - name: Build pull request version
+      - name: Configure
         run: |
-          export SVER=`cat VERSION`
-          export GH=`git log -1 --format=%h`
-          STOCHAS_VERSION="${SVER}" ./scripts/${{ matrix.build_script }}
+          cmake -B build -A x64 \
+            -DSTOCHAS_VERSION="$(cat VERSION)" \
+            -DCMAKE_BUILD_TYPE=Release
 
-      - name: Show built product
-        run: ls -l product
+      - name: Build CLAP
+        run: cmake --build build --config Release --target stochas_CLAP --parallel
 
+      - name: Stage artifact
+        run: |
+          mkdir -p artifact
+          cp "build/stochas_artefacts/Release/CLAP/Stochas GGD.clap" "artifact/Stochas GGD.clap"
+          ls -lah artifact
+
+      - name: Upload CLAP
+        uses: actions/upload-artifact@v4
+        with:
+          name: stochas-ggd-windows-clap
+          path: artifact/Stochas GGD.clap
+          if-no-files-found: error

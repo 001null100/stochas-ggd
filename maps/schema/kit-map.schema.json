@@ -1,0 +1,96 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://stochas-ggd.local/schema/kit-map.schema.json",
+  "title": "Stochas GGD Kit Map",
+  "type": "object",
+  "required": ["schemaVersion", "id", "vendor", "library", "noteNaming", "groups"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "id": { "type": "string", "minLength": 1 },
+    "vendor": { "type": "string", "minLength": 1 },
+    "library": { "type": "string", "minLength": 1 },
+    "variant": { "type": "string" },
+    "noteNaming": {
+      "type": "object",
+      "required": ["scheme", "middleC"],
+      "properties": {
+        "scheme": { "enum": ["kontakt"] },
+        "middleC": { "const": "C3" }
+      },
+      "additionalProperties": false
+    },
+    "source": {
+      "type": "object",
+      "properties": {
+        "type": { "type": "string" },
+        "description": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "groups": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/group" }
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "group": {
+      "type": "object",
+      "required": ["id", "label", "articulations"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "label": { "type": "string", "minLength": 1 },
+        "articulations": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/articulation" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "articulation": {
+      "type": "object",
+      "required": ["semanticId", "label", "kind", "bindings"],
+      "properties": {
+        "semanticId": { "type": "string", "minLength": 1 },
+        "label": { "type": "string", "minLength": 1 },
+        "kind": { "enum": ["note", "control"] },
+        "bindings": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/binding" }
+        },
+        "unresolved": { "type": "boolean", "default": false },
+        "fallbacks": {
+          "type": "array",
+          "items": { "type": "string" },
+          "uniqueItems": true
+        }
+      },
+      "additionalProperties": false
+    },
+    "binding": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["kind", "midi", "noteName", "role"],
+          "properties": {
+            "kind": { "const": "note" },
+            "midi": { "type": "integer", "minimum": 0, "maximum": 127 },
+            "noteName": { "type": "string", "minLength": 1 },
+            "role": { "enum": ["primary", "alternate"] }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["kind", "controller", "role"],
+          "properties": {
+            "kind": { "const": "cc" },
+            "controller": { "type": "integer", "minimum": 0, "maximum": 127 },
+            "role": { "enum": ["primary", "alternate"] }
+          },
+          "additionalProperties": false
+        }
+      ]
+    }
+  }
+}

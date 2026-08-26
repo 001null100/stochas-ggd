@@ -33,12 +33,12 @@ jobs:
       - name: Stage artifact
         run: |
           mkdir -p artifact
-          cp build/stochas_artefacts/Release/CLAP/Stochas.clap artifact/Stochas.clap
+          cp "build/stochas_artefacts/Release/CLAP/Stochas GGD.clap" "artifact/Stochas GGD.clap"
           ls -lah artifact
 
       - name: Upload CLAP
         uses: actions/upload-artifact@v4
         with:
           name: stochas-ggd-windows-clap
-          path: artifact/Stochas.clap
+          path: artifact/Stochas GGD.clap
           if-no-files-found: error

@@ -1,15 +1,13 @@
-name: Build Windows CLAP
+name: Build & Release Windows CLAP
 
 on:
   push:
     branches:
       - main
-    tags:
-      - 'v*'
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build-windows-clap:
@@ -34,15 +32,36 @@ jobs:
       - name: Build CLAP
         run: cmake --build build --config Release --target stochas_CLAP --parallel
 
-      - name: Stage artifact
+      - name: Stage packages
         run: |
           mkdir -p artifact
           cp "build/stochas_artefacts/Release/CLAP/Stochas GGD.clap" "artifact/Stochas GGD.clap"
+          powershell -NoProfile -Command "Compress-Archive -Path 'artifact/Stochas GGD.clap' -DestinationPath 'artifact/Stochas-GGD-Windows.zip' -Force"
           ls -lah artifact
 
-      - name: Upload CLAP
+      - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
           name: stochas-ggd-windows-clap-${{ github.ref_name }}
-          path: artifact/Stochas GGD.clap
+          path: |
+            artifact/Stochas GGD.clap
+            artifact/Stochas-GGD-Windows.zip
           if-no-files-found: error
+
+      - name: Publish alpha release
+        if: github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: v0.1.0-alpha.1
+        run: |
+          if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release create "$RELEASE_TAG" \
+              --target "$GITHUB_SHA" \
+              --title "Stochas GGD v0.1.0-alpha.1" \
+              --prerelease \
+              --notes "First testable Stochas GGD alpha. Includes the drum-focused editor, semantic GGD mappings for P V, P IV and Modern & Massive, 1-4 bar patterns, velocity and microtiming editing, kit remapping, eight pattern slots, undo/clear, and the existing Stochas sequencing engine underneath. Windows CLAP build."
+          fi
+          gh release upload "$RELEASE_TAG" \
+            "artifact/Stochas GGD.clap" \
+            "artifact/Stochas-GGD-Windows.zip" \
+            --clobber

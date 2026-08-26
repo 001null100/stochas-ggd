@@ -13,6 +13,10 @@ concurrency:
 
 env:
   SCCACHE_GHA_ENABLED: "true"
+  # JUCE bootstraps juceaide as a Debug Ninja build. /Z7 keeps debug info in
+  # each object instead of sharing a compiler PDB, which avoids MSVC PDB races
+  # and makes those compilations cache-friendly.
+  _CL_: "/Z7"
 
 jobs:
   build-windows-clap:

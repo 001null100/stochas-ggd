@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <functional>
+#include <iterator>
 #include <vector>
 
 namespace
@@ -14,6 +16,8 @@ constexpr juce::uint32 text     = 0xffe6ebef;
 constexpr juce::uint32 muted    = 0xff8e9aa5;
 constexpr juce::uint32 accent   = 0xff70d6c1;
 constexpr juce::uint32 accent2  = 0xff449f91;
+
+constexpr int maxUserBars = 8;
 
 juce::Colour c(juce::uint32 value) { return juce::Colour(value); }
 
@@ -28,8 +32,29 @@ int storageRowForCanonical(int canonicalRow, int canonicalCount)
     return (SEQ_MAX_ROWS - rowCount) + canonicalRow;
 }
 
+int stepsPerBarForMeter(int numerator, int denominator)
+{
+    return juce::jmax(1, numerator * 16 / denominator);
+}
+
+int clockDividerForMeter(int denominator)
+{
+    // With mStepsPerMeasure == numerator this keeps the underlying storage
+    // grid at one step per sixteenth while still letting StochaEngine follow
+    // 4/x, 8/x and 16/x host meters correctly.
+    return juce::jlimit(SEQ_MIN_CLOCK_DIV, SEQ_MAX_CLOCK_DIV, 256 / denominator);
+}
+
+bool isUndoKey(const juce::KeyPress& key)
+{
+    const auto mods = key.getModifiers();
+    return (mods.isCtrlDown() || mods.isCommandDown())
+        && !mods.isAltDown()
+        && key.getKeyCode() == 'Z';
+}
+
 // The first GGD editor build stored semantic rows at 0..N. StochaEngine does
-// not scan those rows when maxRows is N: it scans the *last* N storage rows.
+// not scan those rows when maxRows is N: it scans the last N storage rows.
 // Move any existing v0 patterns into the range the engine actually plays.
 void migrateLegacyGgdRows(SequenceLayer* layer, int canonicalCount)
 {
@@ -87,8 +112,9 @@ class GgdDrumGrid : public juce::Component
 {
 public:
     GgdDrumGrid(SeqAudioProcessor& p,
-                const juce::Array<GgdCanonicalRow>& canonical)
-        : processor(p), canonicalRows(canonical)
+                const juce::Array<GgdCanonicalRow>& canonical,
+                std::function<void()> undoFn)
+        : processor(p), canonicalRows(canonical), undoCallback(std::move(undoFn))
     {
         setOpaque(true);
         setWantsKeyboardFocus(true);
@@ -97,6 +123,14 @@ public:
     void setMap(const GgdKitMap* newMap)
     {
         map = newMap;
+        rebuildLayout();
+        repaint();
+    }
+
+    void setMeter(int numerator, int denominator)
+    {
+        meterNumerator = juce::jmax(1, numerator);
+        meterDenominator = juce::jmax(1, denominator);
         rebuildLayout();
         repaint();
     }
@@ -116,6 +150,16 @@ public:
         repaint();
     }
 
+    bool keyPressed(const juce::KeyPress& key) override
+    {
+        if (isUndoKey(key) && undoCallback)
+        {
+            undoCallback();
+            return true;
+        }
+        return false;
+    }
+
     void paint(juce::Graphics& g) override
     {
         g.fillAll(c(bg));
@@ -123,50 +167,53 @@ public:
         auto* layer = processor.mData.getUISeqData()->getLayer(0);
         const int numSteps = layer->getNumSteps();
         const int pattern = layer->getCurrentPattern();
-        const int stepsPerMeasure = juce::jmax(1, layer->getStepsPerMeasure());
-        const int stepsPerBeat = juce::jmax(1, stepsPerMeasure / 4);
+        const int storageWidth = storageStepWidth();
+        const int snap = snapSteps();
+        const int stepsPerBar = stepsPerBarForMeter(meterNumerator, meterDenominator);
+        const int stepsPerBeat = juce::jmax(1, 16 / meterDenominator);
+        const int viewX = currentViewX();
+        const int stickyX = viewX;
 
+        // Timeline ruler.
         g.setColour(c(panel));
-        g.fillRect(0, 0, getWidth(), rulerHeight);
+        g.fillRect(nameWidth, 0, getWidth() - nameWidth, rulerHeight);
         g.setColour(c(border).brighter(0.12f));
-        g.drawHorizontalLine(rulerHeight - 1, 0.0f, static_cast<float>(getWidth()));
+        g.drawHorizontalLine(rulerHeight - 1, static_cast<float>(nameWidth),
+                             static_cast<float>(getWidth()));
 
-        g.setFont(12.0f);
-        g.setColour(c(muted));
-        g.drawText("ARTICULATION", 18, 0, nameWidth - 24, rulerHeight,
-                   juce::Justification::centredLeft, false);
-
-        for (int step = 0; step < numSteps; ++step)
+        for (int step = 0; step <= numSteps; ++step)
         {
-            const int x = nameWidth + step * stepWidth;
+            const int x = xForStorageStep(step);
 
-            if (step % stepsPerMeasure == 0)
+            if (step < numSteps && step % stepsPerBar == 0)
             {
-                const int bar = step / stepsPerMeasure + 1;
+                const int bar = step / stepsPerBar + 1;
                 g.setColour(c(text));
                 g.setFont(juce::Font(12.0f, juce::Font::bold));
                 g.drawText("BAR " + juce::String(bar), x + 5, 2,
-                           juce::jmax(stepWidth * stepsPerBeat - 8, 34), 18,
+                           juce::jmax(storageWidth * stepsPerBeat - 8, 42), 18,
                            juce::Justification::centredLeft, false);
             }
 
-            if (step % stepsPerBeat == 0)
+            if (step < numSteps && step % stepsPerBeat == 0)
             {
+                const int beat = (step % stepsPerBar) / stepsPerBeat + 1;
                 g.setColour(c(muted));
                 g.setFont(10.5f);
-                const int beat = (step / stepsPerBeat) % 4 + 1;
-                g.drawText(juce::String(beat), x, 21, stepWidth, 18,
-                           juce::Justification::centred, false);
+                g.drawText(juce::String(beat), x, 21,
+                           juce::jmax(storageWidth * stepsPerBeat, 24), 18,
+                           juce::Justification::centredLeft, false);
             }
         }
 
         if (playPosition >= 0 && playPosition < numSteps)
         {
-            const int x = nameWidth + playPosition * stepWidth;
+            const int x = xForStorageStep(playPosition);
             g.setColour(c(accent).withAlpha(0.10f));
-            g.fillRect(x, rulerHeight, stepWidth, getHeight() - rulerHeight);
+            g.fillRect(x, rulerHeight, storageWidth, getHeight() - rulerHeight);
         }
 
+        // Timeline rows, guides and hits.
         for (int i = 0; i < static_cast<int>(layout.size()); ++i)
         {
             const auto& item = layout[static_cast<size_t>(i)];
@@ -174,87 +221,46 @@ public:
             if (item.header)
             {
                 g.setColour(c(panel2));
-                g.fillRect(0, item.y, getWidth(), item.height);
-
+                g.fillRect(nameWidth, item.y, getWidth() - nameWidth, item.height);
                 g.setColour(c(accent2).withAlpha(0.75f));
                 g.fillRect(nameWidth, item.y, getWidth() - nameWidth, 2);
                 g.setColour(c(accent2).withAlpha(0.58f));
                 g.fillRect(nameWidth, item.y + item.height - 2,
                            getWidth() - nameWidth, 2);
-
-                g.setColour(c(border).brighter(0.12f));
-                g.drawHorizontalLine(item.y + item.height - 1, 0.0f,
-                                     static_cast<float>(nameWidth));
-
-                g.setColour(c(muted));
-                g.setFont(juce::Font(10.5f, juce::Font::bold));
-                g.drawText(item.groupLabel.toUpperCase(), 18, item.y,
-                           nameWidth - 24, item.height,
-                           juce::Justification::centredLeft, false);
                 continue;
             }
 
             const bool alternate = (i % 2) != 0;
             g.setColour(alternate ? c(panel2).withAlpha(0.46f) : c(bg));
-            g.fillRect(0, item.y, getWidth(), item.height);
+            g.fillRect(nameWidth, item.y, getWidth() - nameWidth, item.height);
 
             g.setColour(c(border).withAlpha(0.70f));
-            g.drawHorizontalLine(item.y + item.height - 1, 0.0f,
+            g.drawHorizontalLine(item.y + item.height - 1,
+                                 static_cast<float>(nameWidth),
                                  static_cast<float>(getWidth()));
 
-            g.setColour(c(text));
-            g.setFont(12.5f);
-            g.drawText(item.label, 18, item.y + 1, nameWidth - 86,
-                       item.height - 2, juce::Justification::centredLeft, true);
+            const int storageRow =
+                storageRowForCanonical(item.canonicalRow, canonicalRows.size());
 
-            g.setColour(c(muted));
-            g.setFont(10.5f);
-            g.drawText(item.noteName, nameWidth - 70, item.y + 1, 52,
-                       item.height - 2, juce::Justification::centredRight, false);
-
-            const int storageRow = storageRowForCanonical(
-                item.canonicalRow, canonicalRows.size());
-
-            for (int step = 0; step < numSteps; ++step)
+            for (int step = 0; step <= numSteps; ++step)
             {
-                const int x = nameWidth + step * stepWidth;
+                const int x = xForStorageStep(step);
 
-                if ((step & 1) != 0)
+                if (step < numSteps && step % snap == 0)
                 {
-                    g.setColour(c(panel2).withAlpha(0.12f));
-                    g.fillRect(x, item.y, stepWidth, item.height);
-                }
+                    if (step % stepsPerBar == 0)
+                        g.setColour(c(accent2).withAlpha(0.72f));
+                    else if (step % stepsPerBeat == 0)
+                        g.setColour(c(border).brighter(0.36f));
+                    else
+                        g.setColour(c(border).withAlpha(0.78f));
 
-                if (stepWidth >= 52)
-                {
-                    g.setColour(c(border).withAlpha(0.20f));
-                    g.drawVerticalLine(x + stepWidth / 2,
-                                       static_cast<float>(item.y),
+                    g.drawVerticalLine(x, static_cast<float>(item.y),
                                        static_cast<float>(item.y + item.height));
                 }
 
-                if (stepWidth >= 76)
-                {
-                    g.setColour(c(border).withAlpha(0.13f));
-                    g.drawVerticalLine(x + stepWidth / 4,
-                                       static_cast<float>(item.y),
-                                       static_cast<float>(item.y + item.height));
-                    g.drawVerticalLine(x + (stepWidth * 3) / 4,
-                                       static_cast<float>(item.y),
-                                       static_cast<float>(item.y + item.height));
-                }
-
-                if (step % stepsPerMeasure == 0)
-                    g.setColour(c(accent2).withAlpha(0.68f));
-                else if (step % stepsPerBeat == 0)
-                    g.setColour(c(border).brighter(0.38f));
-                else if (step % juce::jmax(1, stepsPerBeat / 2) == 0)
-                    g.setColour(c(border).brighter(0.10f));
-                else
-                    g.setColour(c(border).withAlpha(0.72f));
-
-                g.drawVerticalLine(x, static_cast<float>(item.y),
-                                   static_cast<float>(item.y + item.height));
+                if (step >= numSteps)
+                    continue;
 
                 const int prob = layer->getProb(storageRow, step, pattern);
                 if (prob < 0)
@@ -265,60 +271,162 @@ public:
                 const float v = static_cast<float>(velocity) / 127.0f;
 
                 const float hitW = std::max(
-                    7.0f, std::min(20.0f, static_cast<float>(stepWidth) - 10.0f));
+                    4.0f, std::min(20.0f, static_cast<float>(storageWidth) - 3.0f));
                 const float hitH = 7.0f + 13.0f * v;
-                const float cx = static_cast<float>(x) + stepWidth * 0.5f;
+                const float cx = static_cast<float>(x) + storageWidth * 0.5f;
                 const float cy = static_cast<float>(item.y) + item.height * 0.5f;
                 juce::Rectangle<float> hit(cx - hitW * 0.5f, cy - hitH * 0.5f,
                                            hitW, hitH);
 
                 g.setColour(c(accent).withAlpha(0.48f + 0.48f * v));
-                g.fillRoundedRectangle(hit, 4.0f);
+                g.fillRoundedRectangle(hit, juce::jmin(4.0f, hitW * 0.35f));
 
                 const int offset = layer->getOffset(storageRow, step, pattern);
                 if (offset != 0)
                 {
                     const float markerX =
                         cx + (static_cast<float>(offset) / 50.0f)
-                                 * (stepWidth * 0.42f);
+                                 * (storageWidth * 0.42f);
                     g.setColour(c(text).withAlpha(0.92f));
                     g.drawVerticalLine(static_cast<int>(std::round(markerX)),
                                        cy - hitH * 0.34f, cy + hitH * 0.34f);
                 }
-            }
 
-            const int endX = nameWidth + numSteps * stepWidth;
-            g.setColour(c(border).brighter(0.18f));
-            g.drawVerticalLine(endX, static_cast<float>(item.y),
-                               static_cast<float>(item.y + item.height));
+                const int retrigger = layer->getLength(storageRow, step, pattern);
+                if (retrigger < 0)
+                {
+                    g.setColour(c(text).withAlpha(0.88f));
+                    g.setFont(9.5f);
+                    g.drawText("x" + juce::String((-retrigger) + 1),
+                               x, item.y, storageWidth, item.height,
+                               juce::Justification::centredBottom, false);
+                }
+            }
         }
 
-        g.setColour(c(border).brighter(0.20f));
-        g.drawVerticalLine(nameWidth, 0.0f, static_cast<float>(getHeight()));
+        // Sticky articulation lane. Draw it last so the timeline disappears cleanly
+        // underneath it while horizontally scrolling.
+        g.setColour(c(panel));
+        g.fillRect(stickyX, 0, nameWidth, rulerHeight);
+        g.setColour(c(muted));
+        g.setFont(12.0f);
+        g.drawText("ARTICULATION", stickyX + 18, 0, nameWidth - 24, rulerHeight,
+                   juce::Justification::centredLeft, false);
+
+        for (int i = 0; i < static_cast<int>(layout.size()); ++i)
+        {
+            const auto& item = layout[static_cast<size_t>(i)];
+
+            if (item.header)
+            {
+                g.setColour(c(panel2));
+                g.fillRect(stickyX, item.y, nameWidth, item.height);
+                g.setColour(c(border).brighter(0.12f));
+                g.drawHorizontalLine(item.y + item.height - 1,
+                                     static_cast<float>(stickyX),
+                                     static_cast<float>(stickyX + nameWidth));
+                g.setColour(c(muted));
+                g.setFont(juce::Font(10.5f, juce::Font::bold));
+                g.drawText(item.groupLabel.toUpperCase(), stickyX + 18, item.y,
+                           nameWidth - 24, item.height,
+                           juce::Justification::centredLeft, false);
+                continue;
+            }
+
+            const bool alternate = (i % 2) != 0;
+            g.setColour(alternate ? c(panel2).withAlpha(0.96f) : c(bg));
+            g.fillRect(stickyX, item.y, nameWidth, item.height);
+            g.setColour(c(border).withAlpha(0.70f));
+            g.drawHorizontalLine(item.y + item.height - 1,
+                                 static_cast<float>(stickyX),
+                                 static_cast<float>(stickyX + nameWidth));
+
+            g.setColour(c(text));
+            g.setFont(12.5f);
+            g.drawText(item.label, stickyX + 18, item.y + 1, nameWidth - 86,
+                       item.height - 2, juce::Justification::centredLeft, true);
+
+            g.setColour(c(muted));
+            g.setFont(10.5f);
+            g.drawText(item.noteName, stickyX + nameWidth - 70, item.y + 1, 52,
+                       item.height - 2, juce::Justification::centredRight, false);
+        }
+
+        g.setColour(c(border).brighter(0.25f));
+        g.drawVerticalLine(stickyX + nameWidth, 0.0f,
+                           static_cast<float>(getHeight()));
     }
 
     void mouseDown(const juce::MouseEvent& e) override
     {
+        grabKeyboardFocus();
+
         dragMode = DragMode::none;
         lastPaintRow = -1;
         lastPaintStep = -1;
 
         int canonicalRow = -1;
         int step = -1;
-        if (!cellAt(e.position, canonicalRow, step))
+        if (!snappedCellAt(e.position, canonicalRow, step))
             return;
 
         auto* layer = processor.mData.getUISeqData()->getLayer(0);
         const int pattern = layer->getCurrentPattern();
-        const int storageRow = storageRowForCanonical(
-            canonicalRow, canonicalRows.size());
+        const int storageRow =
+            storageRowForCanonical(canonicalRow, canonicalRows.size());
         const bool isOn = layer->getProb(storageRow, step, pattern) >= 0;
 
         dragRow = canonicalRow;
         dragStep = step;
         dragStart = e.position;
 
-        if (e.mods.isShiftDown() && isOn)
+        const auto mods = e.mods;
+        const bool command = mods.isCtrlDown() || mods.isCommandDown();
+
+        // Ctrl+Shift click cycles retriggers: normal, double, triple, quad, normal.
+        if (command && mods.isShiftDown() && !mods.isAltDown())
+        {
+            if (!isOn)
+            {
+                setCell(canonicalRow, step, true);
+                layer->setLength(storageRow, step, -1, pattern);
+            }
+            else
+            {
+                const int len = layer->getLength(storageRow, step, pattern);
+                const int next = len >= 0 ? -1 : len > -3 ? len - 1 : 0;
+                layer->setLength(storageRow, step, static_cast<int8_t>(next), pattern);
+            }
+
+            dragMode = DragMode::special;
+            repaint();
+            return;
+        }
+
+        // Ctrl click is a quick ghost-note gesture.
+        if (command && !mods.isAltDown())
+        {
+            if (!isOn)
+            {
+                setCell(canonicalRow, step, true);
+                layer->setVel(storageRow, step, 42, pattern);
+            }
+            else
+            {
+                const int oldVelocity =
+                    juce::jlimit(1, 127, static_cast<int>(
+                        layer->getVel(storageRow, step, pattern)));
+                layer->setVel(storageRow, step,
+                              static_cast<int8_t>(oldVelocity <= 55 ? 100 : 42),
+                              pattern);
+            }
+
+            dragMode = DragMode::special;
+            repaint();
+            return;
+        }
+
+        if (mods.isShiftDown() && isOn)
         {
             dragMode = DragMode::velocity;
             dragStartValue = juce::jlimit(
@@ -326,14 +434,14 @@ public:
             return;
         }
 
-        if (e.mods.isAltDown() && isOn)
+        if (mods.isAltDown() && isOn)
         {
             dragMode = DragMode::timing;
             dragStartValue = layer->getOffset(storageRow, step, pattern);
             return;
         }
 
-        if (e.mods.isRightButtonDown())
+        if (mods.isRightButtonDown())
         {
             dragMode = DragMode::erase;
             setCell(canonicalRow, step, false);
@@ -356,8 +464,8 @@ public:
 
         if (dragMode == DragMode::velocity && dragRow >= 0)
         {
-            const int storageRow = storageRowForCanonical(
-                dragRow, canonicalRows.size());
+            const int storageRow =
+                storageRowForCanonical(dragRow, canonicalRows.size());
             const int delta =
                 static_cast<int>((dragStart.y - e.position.y) * 1.5f);
             const int velocity = juce::jlimit(1, 127, dragStartValue + delta);
@@ -369,10 +477,10 @@ public:
 
         if (dragMode == DragMode::timing && dragRow >= 0)
         {
-            const int storageRow = storageRowForCanonical(
-                dragRow, canonicalRows.size());
+            const int storageRow =
+                storageRowForCanonical(dragRow, canonicalRows.size());
             const float pixelsForHalfStep =
-                juce::jmax(10.0f, static_cast<float>(stepWidth) * 0.5f);
+                juce::jmax(8.0f, static_cast<float>(storageStepWidth()) * 0.5f);
             const float dx = e.position.x - dragStart.x;
             const int delta = static_cast<int>(
                 std::round((dx / pixelsForHalfStep) * 50.0f));
@@ -388,7 +496,7 @@ public:
 
         int canonicalRow = -1;
         int step = -1;
-        if (!cellAt(e.position, canonicalRow, step))
+        if (!snappedCellAt(e.position, canonicalRow, step))
             return;
 
         if (canonicalRow == lastPaintRow && step == lastPaintStep)
@@ -415,42 +523,88 @@ public:
         if (viewport == nullptr)
             return;
 
-        if (e.mods.isCtrlDown())
+        const float primaryDelta =
+            std::abs(wheel.deltaY) >= std::abs(wheel.deltaX)
+                ? wheel.deltaY
+                : wheel.deltaX;
+
+        if (e.mods.isCtrlDown() || e.mods.isCommandDown())
         {
-            const float zoomDelta =
-                std::abs(wheel.deltaY) >= std::abs(wheel.deltaX)
-                    ? wheel.deltaY
-                    : wheel.deltaX;
-
-            if (std::abs(zoomDelta) < 0.0001f)
+            if (std::abs(primaryDelta) < 0.0001f)
                 return;
 
-            const int oldStepWidth = stepWidth;
-            const int newStepWidth = juce::jlimit(
-                minStepWidth, maxStepWidth,
-                oldStepWidth + (zoomDelta > 0.0f ? zoomStep : -zoomStep));
+            const int oldZoom = zoomLevel;
+            const int newZoom = juce::jlimit(
+                0, maxZoomLevel, oldZoom + (primaryDelta > 0.0f ? 1 : -1));
 
-            if (newStepWidth == oldStepWidth)
+            if (newZoom == oldZoom)
                 return;
 
-            const float stepCoordinate =
-                (e.position.x - static_cast<float>(nameWidth))
-                / static_cast<float>(oldStepWidth);
+            const int oldStorageWidth = storageStepWidth();
             const int oldViewX = viewport->getViewPositionX();
             const int oldViewY = viewport->getViewPositionY();
+            const float anchorX = juce::jmax(
+                e.position.x, static_cast<float>(oldViewX + nameWidth));
+            const float storageCoordinate =
+                (anchorX - static_cast<float>(nameWidth))
+                / static_cast<float>(oldStorageWidth);
 
-            stepWidth = newStepWidth;
+            zoomLevel = newZoom;
             rebuildLayout();
 
             const float newAnchor =
                 static_cast<float>(nameWidth)
-                + stepCoordinate * static_cast<float>(stepWidth);
+                + storageCoordinate * static_cast<float>(storageStepWidth());
             const int newViewX =
-                oldViewX + static_cast<int>(std::round(newAnchor - e.position.x));
+                oldViewX + static_cast<int>(std::round(newAnchor - anchorX));
 
             viewport->setViewPosition(juce::jmax(0, newViewX), oldViewY);
             repaint();
             return;
+        }
+
+        if (e.mods.isAltDown())
+        {
+            int canonicalRow = -1;
+            int step = -1;
+            if (exactCellAt(e.position, canonicalRow, step))
+            {
+                auto* layer = processor.mData.getUISeqData()->getLayer(0);
+                const int storageRow =
+                    storageRowForCanonical(canonicalRow, canonicalRows.size());
+                const int pattern = layer->getCurrentPattern();
+
+                if (layer->getProb(storageRow, step, pattern) >= 0)
+                {
+                    if (e.mods.isShiftDown())
+                    {
+                        if (cycleHatArticulation(canonicalRow, step,
+                                                 primaryDelta >= 0.0f ? 1 : -1))
+                            return;
+                    }
+                    else
+                    {
+                        const int oldVelocity = juce::jlimit(
+                            1, 127, static_cast<int>(
+                                layer->getVel(storageRow, step, pattern)));
+                        const int amount =
+                            juce::jmax(1, static_cast<int>(
+                                std::round(std::abs(primaryDelta) * 24.0f)));
+                        const int velocity = juce::jlimit(
+                            1, 127,
+                            oldVelocity + (primaryDelta >= 0.0f ? amount : -amount));
+
+                        if (velocity != oldVelocity)
+                        {
+                            layer->setVel(storageRow, step,
+                                          static_cast<int8_t>(velocity), pattern);
+                            publishChange();
+                            repaint();
+                        }
+                        return;
+                    }
+                }
+            }
         }
 
         const float scrollScale = 180.0f;
@@ -485,14 +639,18 @@ private:
         juce::String noteName;
     };
 
-    enum class DragMode { none, paint, erase, velocity, timing };
+    enum class DragMode { none, paint, erase, velocity, timing, special };
 
     SeqAudioProcessor& processor;
     const juce::Array<GgdCanonicalRow>& canonicalRows;
+    std::function<void()> undoCallback;
     const GgdKitMap* map = nullptr;
     std::vector<LayoutItem> layout;
 
+    int meterNumerator = 4;
+    int meterDenominator = 4;
     int playPosition = -1;
+    int zoomLevel = 0;
     DragMode dragMode = DragMode::none;
     int dragRow = -1;
     int dragStep = -1;
@@ -500,15 +658,36 @@ private:
     juce::Point<float> dragStart;
     int lastPaintRow = -1;
     int lastPaintStep = -1;
-    int stepWidth = 38;
 
     static constexpr int nameWidth = 238;
     static constexpr int rulerHeight = 42;
     static constexpr int groupHeight = 28;
     static constexpr int rowHeight = 34;
-    static constexpr int minStepWidth = 18;
-    static constexpr int maxStepWidth = 92;
-    static constexpr int zoomStep = 6;
+    static constexpr int divisionWidth = 56;
+    static constexpr int maxZoomLevel = 2;
+
+    int snapSteps() const
+    {
+        static constexpr int values[] = { 4, 2, 1 };
+        return values[juce::jlimit(0, maxZoomLevel, zoomLevel)];
+    }
+
+    int storageStepWidth() const
+    {
+        return juce::jmax(6, divisionWidth / snapSteps());
+    }
+
+    int xForStorageStep(int step) const
+    {
+        return nameWidth + step * storageStepWidth();
+    }
+
+    int currentViewX() const
+    {
+        if (auto* viewport = findParentComponentOfClass<juce::Viewport>())
+            return viewport->getViewPositionX();
+        return 0;
+    }
 
     void rebuildLayout()
     {
@@ -552,39 +731,57 @@ private:
         }
 
         auto* layer = processor.mData.getUISeqData()->getLayer(0);
-        const int width =
-            std::max(840, nameWidth + layer->getNumSteps() * stepWidth + 24);
+        // The extra nameWidth at the end lets the final beat scroll out from
+        // underneath the sticky articulation lane.
+        const int width = std::max(
+            840,
+            nameWidth + layer->getNumSteps() * storageStepWidth()
+                + nameWidth + 24);
         setSize(width, std::max(320, y + 18));
     }
 
-    bool cellAt(juce::Point<float> p, int& canonicalRow, int& step) const
+    bool rowAtY(float y, int& canonicalRow) const
     {
-        if (p.x < nameWidth || p.y < rulerHeight)
-            return false;
-
-        auto* layer = processor.mData.getUISeqData()->getLayer(0);
-        step = static_cast<int>((p.x - nameWidth) / stepWidth);
-        if (step < 0 || step >= layer->getNumSteps())
-            return false;
-
         for (const auto& item : layout)
         {
-            if (!item.header && p.y >= item.y && p.y < item.y + item.height)
+            if (!item.header && y >= item.y && y < item.y + item.height)
             {
                 canonicalRow = item.canonicalRow;
                 return true;
             }
         }
-
         return false;
+    }
+
+    bool exactCellAt(juce::Point<float> p, int& canonicalRow, int& step) const
+    {
+        if (p.y < rulerHeight || p.x < currentViewX() + nameWidth)
+            return false;
+
+        auto* layer = processor.mData.getUISeqData()->getLayer(0);
+        step = static_cast<int>((p.x - nameWidth) / storageStepWidth());
+        if (step < 0 || step >= layer->getNumSteps())
+            return false;
+
+        return rowAtY(p.y, canonicalRow);
+    }
+
+    bool snappedCellAt(juce::Point<float> p, int& canonicalRow, int& step) const
+    {
+        if (!exactCellAt(p, canonicalRow, step))
+            return false;
+
+        const int snap = snapSteps();
+        step = (step / snap) * snap;
+        return true;
     }
 
     void setCell(int canonicalRow, int step, bool on)
     {
         auto* layer = processor.mData.getUISeqData()->getLayer(0);
         const int pattern = layer->getCurrentPattern();
-        const int storageRow = storageRowForCanonical(
-            canonicalRow, canonicalRows.size());
+        const int storageRow =
+            storageRowForCanonical(canonicalRow, canonicalRows.size());
 
         if (!on)
         {
@@ -600,6 +797,83 @@ private:
             layer->setVel(storageRow, step, 100, pattern);
     }
 
+    bool cycleHatArticulation(int canonicalRow, int step, int direction)
+    {
+        if (map == nullptr || canonicalRow < 0 || canonicalRow >= canonicalRows.size())
+            return false;
+
+        static const char* hats[] = {
+            "hihat.tip_tight",
+            "hihat.edge_tight",
+            "hihat.tip_closed",
+            "hihat.edge_closed",
+            "hihat.open_1",
+            "hihat.open_2",
+            "hihat.open_3"
+        };
+
+        const auto semanticId = canonicalRows.getReference(canonicalRow).semanticId;
+        int sourceIndex = -1;
+        for (int i = 0; i < static_cast<int>(std::size(hats)); ++i)
+        {
+            if (semanticId == hats[i])
+            {
+                sourceIndex = i;
+                break;
+            }
+        }
+
+        if (sourceIndex < 0)
+            return false;
+
+        for (int attempt = 1; attempt <= static_cast<int>(std::size(hats)); ++attempt)
+        {
+            const int count = static_cast<int>(std::size(hats));
+            const int targetIndex =
+                (sourceIndex + direction * attempt + count * 2) % count;
+            const juce::String targetId(hats[targetIndex]);
+
+            if (map->findArticulation(targetId) == nullptr)
+                continue;
+
+            const int targetCanonical =
+                GgdKitMapLibrary::findCanonicalRow(canonicalRows, targetId);
+            if (targetCanonical < 0 || targetCanonical == canonicalRow)
+                continue;
+
+            auto* layer = processor.mData.getUISeqData()->getLayer(0);
+            const int pattern = layer->getCurrentPattern();
+            const int src =
+                storageRowForCanonical(canonicalRow, canonicalRows.size());
+            const int dst =
+                storageRowForCanonical(targetCanonical, canonicalRows.size());
+
+            const int prob = layer->getProb(src, step, pattern);
+            if (prob < 0)
+                return false;
+
+            const int vel = layer->getVel(src, step, pattern);
+            const int len = layer->getLength(src, step, pattern);
+            const int offs = layer->getOffset(src, step, pattern);
+
+            layer->setProb(dst, step, static_cast<int8_t>(prob), pattern);
+            layer->setVel(dst, step, static_cast<int8_t>(vel), pattern);
+            layer->setLength(dst, step, static_cast<int8_t>(len), pattern);
+            layer->setOffset(dst, step, static_cast<int8_t>(offs), pattern);
+
+            layer->setLength(src, step, 0, pattern);
+            layer->setProb(src, step, SEQ_PROB_OFF, pattern);
+            layer->setVel(src, step, 0, pattern);
+            layer->setOffset(src, step, 0, pattern);
+
+            publishChange();
+            repaint();
+            return true;
+        }
+
+        return false;
+    }
+
     void publishChange()
     {
         processor.mData.swap();
@@ -612,11 +886,13 @@ GgdDrumEditor::GgdDrumEditor(SeqAudioProcessor& p)
 {
     configureLookAndFeel();
     setLookAndFeel(&lookAndFeel);
+    setWantsKeyboardFocus(true);
 
     maps = GgdKitMapLibrary::loadBuiltInMaps();
     canonicalRows = GgdKitMapLibrary::buildCanonicalRows(maps);
 
-    grid = std::make_unique<GgdDrumGrid>(processor, canonicalRows);
+    grid = std::make_unique<GgdDrumGrid>(
+        processor, canonicalRows, [this] { performUndo(); });
     gridViewport.setViewedComponent(grid.get(), false);
     gridViewport.setScrollBarsShown(true, true);
     gridViewport.setScrollBarThickness(11);
@@ -642,7 +918,7 @@ GgdDrumEditor::GgdDrumEditor(SeqAudioProcessor& p)
     };
     addAndMakeVisible(kitSelector);
 
-    patternSelector.setTooltip("Stochas pattern slot");
+    patternSelector.setTooltip("Pattern slot");
     for (int i = 1; i <= SEQ_MAX_PATTERNS; ++i)
         patternSelector.addItem("Pattern " + juce::String(i), i);
     patternSelector.onChange = [this]
@@ -659,21 +935,60 @@ GgdDrumEditor::GgdDrumEditor(SeqAudioProcessor& p)
     };
     addAndMakeVisible(patternSelector);
 
-    barsSelector.setTooltip("Pattern length in 4/4 bars");
-    for (int bars = 1; bars <= 4; ++bars)
-        barsSelector.addItem(juce::String(bars) + (bars == 1 ? " bar" : " bars"), bars);
+    meterLabel.setText("METER", juce::dontSendNotification);
+    meterLabel.setFont(juce::Font(10.5f, juce::Font::bold));
+    meterLabel.setColour(juce::Label::textColourId, c(muted));
+    addAndMakeVisible(meterLabel);
+
+    for (int numerator = 1; numerator <= 16; ++numerator)
+        numeratorSelector.addItem(juce::String(numerator), numerator);
+    numeratorSelector.setTooltip("Time signature numerator");
+    numeratorSelector.onChange = [this]
+    {
+        if (numeratorSelector.getSelectedId() > 0)
+        {
+            timeSigNumerator = numeratorSelector.getSelectedId();
+            applyPatternGeometry();
+        }
+    };
+    addAndMakeVisible(numeratorSelector);
+
+    meterSlash.setText("/", juce::dontSendNotification);
+    meterSlash.setFont(juce::Font(16.0f, juce::Font::bold));
+    meterSlash.setColour(juce::Label::textColourId, c(muted));
+    meterSlash.setJustificationType(juce::Justification::centred);
+    addAndMakeVisible(meterSlash);
+
+    denominatorSelector.addItem("4", 1);
+    denominatorSelector.addItem("8", 2);
+    denominatorSelector.addItem("16", 3);
+    denominatorSelector.setTooltip("Time signature denominator");
+    denominatorSelector.onChange = [this]
+    {
+        const int id = denominatorSelector.getSelectedId();
+        if (id > 0)
+        {
+            static constexpr int values[] = { 4, 8, 16 };
+            timeSigDenominator = values[id - 1];
+            applyPatternGeometry();
+        }
+    };
+    addAndMakeVisible(denominatorSelector);
+
+    barsLabel.setText("LENGTH", juce::dontSendNotification);
+    barsLabel.setFont(juce::Font(10.5f, juce::Font::bold));
+    barsLabel.setColour(juce::Label::textColourId, c(muted));
+    addAndMakeVisible(barsLabel);
+
+    barsSelector.setTooltip("Pattern length in bars");
     barsSelector.onChange = [this]
     {
         const int bars = barsSelector.getSelectedId();
-        if (bars <= 0)
-            return;
-
-        auto* layer = processor.mData.getUISeqData()->getLayer(0);
-        layer->setNumSteps(bars * 16);
-        layer->setStepsPerMeasure(16);
-        layer->setClockDivider(SEQ_DEFAULT_CLOCK_DIV);
-        publishModelChange();
-        grid->refreshSize();
+        if (bars > 0)
+        {
+            activeBars = bars;
+            applyPatternGeometry();
+        }
     };
     addAndMakeVisible(barsSelector);
 
@@ -687,6 +1002,7 @@ GgdDrumEditor::GgdDrumEditor(SeqAudioProcessor& p)
         layer->setPatternName(patternName.getText().toRawUTF8());
         publishModelChange();
         patternName.giveAwayKeyboardFocus();
+        refreshPatternSelectorLabels();
     };
     patternName.onFocusLost = [this]
     {
@@ -695,28 +1011,29 @@ GgdDrumEditor::GgdDrumEditor(SeqAudioProcessor& p)
         {
             layer->setPatternName(patternName.getText().toRawUTF8());
             publishModelChange();
+            refreshPatternSelectorLabels();
         }
     };
     addAndMakeVisible(patternName);
 
-    undoButton.setTooltip("Undo the most recent sequence edit");
-    undoButton.onClick = [this]
-    {
-        processor.mData.undo();
-        refreshControlsFromModel();
-        grid->refreshSize();
-    };
+    undoButton.setTooltip("Undo the most recent sequence edit (Ctrl+Z)");
+    undoButton.onClick = [this] { performUndo(); };
     addAndMakeVisible(undoButton);
+
+    duplicateButton.setTooltip("Duplicate the current pattern into the next slot");
+    duplicateButton.onClick = [this] { duplicateCurrentPattern(); };
+    addAndMakeVisible(duplicateButton);
 
     clearButton.setTooltip("Clear the current pattern");
     clearButton.onClick = [this] { clearCurrentPattern(); };
     addAndMakeVisible(clearButton);
 
     hintLabel.setText(
-        "Click/drag: paint  |  Right-drag: erase  |  Shift-drag: velocity  |  "
-        "Alt-drag: timing  |  Wheel: scroll  |  Ctrl+wheel: zoom",
+        "Paint: click/drag  |  Erase: right-drag  |  Velocity: Shift-drag or Alt+wheel  |  "
+        "Timing: Alt-drag  |  Zoom: Ctrl+wheel (1/4 > 1/8 > 1/16)  |  "
+        "Ghost: Ctrl+click  |  Roll: Ctrl+Shift+click  |  Hat articulation: Alt+Shift+wheel",
         juce::dontSendNotification);
-    hintLabel.setFont(juce::Font(11.0f));
+    hintLabel.setFont(juce::Font(10.5f));
     hintLabel.setColour(juce::Label::textColourId, c(muted));
     addAndMakeVisible(hintLabel);
 
@@ -726,8 +1043,8 @@ GgdDrumEditor::GgdDrumEditor(SeqAudioProcessor& p)
         grid->setMap(&maps.getReference(activeMapIndex));
 
     setResizable(true, true);
-    setResizeLimits(760, 480, 1600, 1200);
-    setSize(1080, 720);
+    setResizeLimits(820, 520, 1800, 1300);
+    setSize(1120, 760);
     startTimerHz(30);
 }
 
@@ -736,6 +1053,16 @@ GgdDrumEditor::~GgdDrumEditor()
     stopTimer();
     gridViewport.setViewedComponent(nullptr, false);
     setLookAndFeel(nullptr);
+}
+
+bool GgdDrumEditor::keyPressed(const juce::KeyPress& key)
+{
+    if (isUndoKey(key))
+    {
+        performUndo();
+        return true;
+    }
+    return false;
 }
 
 void GgdDrumEditor::configureLookAndFeel()
@@ -765,41 +1092,59 @@ void GgdDrumEditor::paint(juce::Graphics& g)
     g.fillAll(c(bg));
 
     g.setColour(c(panel));
-    g.fillRect(0, 0, getWidth(), 72);
+    g.fillRect(0, 0, getWidth(), topAreaHeight);
     g.setColour(c(border));
-    g.drawHorizontalLine(71, 0.0f, static_cast<float>(getWidth()));
+    g.drawHorizontalLine(topAreaHeight - 1, 0.0f, static_cast<float>(getWidth()));
 
     g.setColour(c(panel));
-    g.fillRect(0, getHeight() - 34, getWidth(), 34);
+    g.fillRect(0, getHeight() - bottomAreaHeight, getWidth(), bottomAreaHeight);
     g.setColour(c(border));
-    g.drawHorizontalLine(getHeight() - 34, 0.0f, static_cast<float>(getWidth()));
+    g.drawHorizontalLine(getHeight() - bottomAreaHeight, 0.0f,
+                         static_cast<float>(getWidth()));
 }
 
 void GgdDrumEditor::resized()
 {
     const int pad = 12;
-    auto top = juce::Rectangle<int>(pad, 9, getWidth() - pad * 2, 52);
 
-    productLabel.setBounds(top.removeFromLeft(142));
-    transportStatus.setBounds(top.removeFromLeft(76));
-    top.removeFromLeft(8);
+    auto first = juce::Rectangle<int>(
+        pad, 7, getWidth() - pad * 2, 43);
 
-    kitSelector.setBounds(top.removeFromLeft(210).reduced(0, 7));
-    top.removeFromLeft(8);
-    patternSelector.setBounds(top.removeFromLeft(116).reduced(0, 7));
-    top.removeFromLeft(8);
-    barsSelector.setBounds(top.removeFromLeft(92).reduced(0, 7));
-    top.removeFromLeft(8);
+    productLabel.setBounds(first.removeFromLeft(146));
+    transportStatus.setBounds(first.removeFromLeft(82));
+    first.removeFromLeft(6);
 
-    const int buttonWidth = 62;
-    clearButton.setBounds(top.removeFromRight(buttonWidth).reduced(0, 7));
-    top.removeFromRight(6);
-    undoButton.setBounds(top.removeFromRight(buttonWidth).reduced(0, 7));
-    top.removeFromRight(8);
-    patternName.setBounds(top.reduced(0, 7));
+    kitSelector.setBounds(first.removeFromLeft(218).reduced(0, 5));
+    first.removeFromLeft(7);
+    patternSelector.setBounds(first.removeFromLeft(124).reduced(0, 5));
+    first.removeFromLeft(7);
 
-    gridViewport.setBounds(0, 72, getWidth(), getHeight() - 106);
-    hintLabel.setBounds(14, getHeight() - 33, getWidth() - 28, 32);
+    clearButton.setBounds(first.removeFromRight(58).reduced(0, 5));
+    first.removeFromRight(5);
+    duplicateButton.setBounds(first.removeFromRight(76).reduced(0, 5));
+    first.removeFromRight(5);
+    undoButton.setBounds(first.removeFromRight(58).reduced(0, 5));
+    first.removeFromRight(7);
+    patternName.setBounds(first.reduced(0, 5));
+
+    auto second = juce::Rectangle<int>(
+        pad, 54, getWidth() - pad * 2, 43);
+
+    meterLabel.setBounds(second.removeFromLeft(48));
+    numeratorSelector.setBounds(second.removeFromLeft(58).reduced(0, 5));
+    meterSlash.setBounds(second.removeFromLeft(20));
+    denominatorSelector.setBounds(second.removeFromLeft(68).reduced(0, 5));
+    second.removeFromLeft(16);
+
+    barsLabel.setBounds(second.removeFromLeft(52));
+    barsSelector.setBounds(second.removeFromLeft(98).reduced(0, 5));
+
+    gridViewport.setBounds(
+        0, topAreaHeight, getWidth(),
+        getHeight() - topAreaHeight - bottomAreaHeight);
+    hintLabel.setBounds(
+        14, getHeight() - bottomAreaHeight + 1,
+        getWidth() - 28, bottomAreaHeight - 2);
 }
 
 void GgdDrumEditor::timerCallback()
@@ -836,26 +1181,41 @@ void GgdDrumEditor::initialiseDrumState()
     const juce::String oldLayerName(layer->getLayerName());
     const bool legacyConfigured = oldLayerName.startsWith("GGD:");
     const bool configuredV2 = oldLayerName.startsWith("GGD2:");
-    const bool alreadyConfigured = legacyConfigured || configuredV2;
+    const bool configuredV3 = oldLayerName.startsWith("GGD3:");
+    const bool alreadyConfigured =
+        legacyConfigured || configuredV2 || configuredV3;
+
+    int preservedBars = 1;
 
     if (!alreadyConfigured)
     {
         seq->clearLayer(0);
         layer = seq->getLayer(0);
         layer->setNumSteps(16);
-        layer->setStepsPerMeasure(16);
-        layer->setClockDivider(SEQ_DEFAULT_CLOCK_DIV);
         layer->setMidiChannel(1);
         layer->setCurrentPattern(0);
 
         for (int i = 1; i < SEQ_MAX_LAYERS; ++i)
             seq->getLayer(i)->setMuted(true);
     }
-    else if (legacyConfigured)
+    else
     {
-        migrateLegacyGgdRows(layer, canonicalRows.size());
+        if (legacyConfigured)
+            migrateLegacyGgdRows(layer, canonicalRows.size());
+
+        if (configuredV3)
+            parseMeterFromLayerName(oldLayerName, timeSigNumerator,
+                                    timeSigDenominator);
+
+        const int oldStepsPerBar =
+            stepsPerBarForMeter(timeSigNumerator, timeSigDenominator);
+        preservedBars = juce::jlimit(
+            1, maxUserBars,
+            juce::jmax(1, (layer->getNumSteps() + oldStepsPerBar - 1)
+                              / oldStepsPerBar));
     }
 
+    activeBars = preservedBars;
     activeMapIndex = alreadyConfigured ? mapIndexFromLayerName(oldLayerName) : 0;
     activeMapIndex = juce::jlimit(0, maps.size() - 1, activeMapIndex);
 
@@ -867,6 +1227,7 @@ void GgdDrumEditor::initialiseDrumState()
     layer->setMaxRows(activeStorageRowCount(canonicalRows.size()));
     layer->setMaxPoly(juce::jmin(SEQ_DEFAULT_MAX_POLY, layer->getMaxRows()));
 
+    applyPatternGeometry(false);
     applyActiveMapBindings(false);
     publishModelChange();
 }
@@ -886,8 +1247,8 @@ void GgdDrumEditor::applyActiveMapBindings(bool publish)
 
     for (int canonicalRow = 0; canonicalRow < semanticCount; ++canonicalRow)
     {
-        const int storageRow = storageRowForCanonical(
-            canonicalRow, canonicalRows.size());
+        const int storageRow =
+            storageRowForCanonical(canonicalRow, canonicalRows.size());
         const auto& canonical = canonicalRows.getReference(canonicalRow);
         const auto* articulation = map.findArticulation(canonical.semanticId);
         const auto* binding =
@@ -902,7 +1263,41 @@ void GgdDrumEditor::applyActiveMapBindings(bool publish)
         layer->setNoteName(storageRow, displayName.toRawUTF8());
     }
 
-    layer->setLayerName(("GGD2:" + mapPersistenceToken(map)).toRawUTF8());
+    updatePersistenceTag();
+
+    if (publish)
+        publishModelChange();
+}
+
+void GgdDrumEditor::applyPatternGeometry(bool publish)
+{
+    if (maps.isEmpty())
+        return;
+
+    timeSigNumerator = juce::jlimit(1, 16, timeSigNumerator);
+    if (timeSigDenominator != 4
+        && timeSigDenominator != 8
+        && timeSigDenominator != 16)
+        timeSigDenominator = 4;
+
+    const int stepsPerBar =
+        stepsPerBarForMeter(timeSigNumerator, timeSigDenominator);
+    const int maxBars =
+        juce::jlimit(1, maxUserBars, SEQ_MAX_STEPS / stepsPerBar);
+    activeBars = juce::jlimit(1, maxBars, activeBars);
+
+    auto* layer = processor.mData.getUISeqData()->getLayer(0);
+    layer->setStepsPerMeasure(timeSigNumerator);
+    layer->setClockDivider(clockDividerForMeter(timeSigDenominator));
+    layer->setNumSteps(activeBars * stepsPerBar);
+    updatePersistenceTag();
+
+    rebuildBarsSelector();
+    if (grid != nullptr)
+    {
+        grid->setMeter(timeSigNumerator, timeSigDenominator);
+        grid->refreshSize();
+    }
 
     if (publish)
         publishModelChange();
@@ -914,20 +1309,70 @@ void GgdDrumEditor::refreshControlsFromModel()
         return;
 
     auto* layer = processor.mData.getUISeqData()->getLayer(0);
+    const juce::String layerName(layer->getLayerName());
 
-    const int mapFromState = mapIndexFromLayerName(layer->getLayerName());
+    const int mapFromState = mapIndexFromLayerName(layerName);
     if (mapFromState >= 0 && mapFromState < maps.size())
         activeMapIndex = mapFromState;
+
+    parseMeterFromLayerName(layerName, timeSigNumerator, timeSigDenominator);
+
+    const int stepsPerBar =
+        stepsPerBarForMeter(timeSigNumerator, timeSigDenominator);
+    const int maxBars =
+        juce::jlimit(1, maxUserBars, SEQ_MAX_STEPS / stepsPerBar);
+    activeBars = juce::jlimit(
+        1, maxBars,
+        juce::jmax(1, (layer->getNumSteps() + stepsPerBar - 1) / stepsPerBar));
 
     kitSelector.setSelectedId(activeMapIndex + 1, juce::dontSendNotification);
     patternSelector.setSelectedId(layer->getCurrentPattern() + 1,
                                   juce::dontSendNotification);
     patternName.setText(layer->getPatternName(), false);
+    numeratorSelector.setSelectedId(timeSigNumerator, juce::dontSendNotification);
 
-    const int bars = juce::jlimit(1, 4, (layer->getNumSteps() + 15) / 16);
-    barsSelector.setSelectedId(bars, juce::dontSendNotification);
+    const int denominatorId =
+        timeSigDenominator == 4 ? 1 : timeSigDenominator == 8 ? 2 : 3;
+    denominatorSelector.setSelectedId(denominatorId, juce::dontSendNotification);
 
+    rebuildBarsSelector();
+    barsSelector.setSelectedId(activeBars, juce::dontSendNotification);
+    refreshPatternSelectorLabels();
+
+    grid->setMeter(timeSigNumerator, timeSigDenominator);
     grid->setMap(&maps.getReference(activeMapIndex));
+}
+
+void GgdDrumEditor::rebuildBarsSelector()
+{
+    const int stepsPerBar =
+        stepsPerBarForMeter(timeSigNumerator, timeSigDenominator);
+    const int maxBars =
+        juce::jlimit(1, maxUserBars, SEQ_MAX_STEPS / stepsPerBar);
+
+    barsSelector.clear(juce::dontSendNotification);
+    for (int bars = 1; bars <= maxBars; ++bars)
+        barsSelector.addItem(
+            juce::String(bars) + (bars == 1 ? " bar" : " bars"), bars);
+
+    barsSelector.setSelectedId(
+        juce::jlimit(1, maxBars, activeBars), juce::dontSendNotification);
+}
+
+void GgdDrumEditor::refreshPatternSelectorLabels()
+{
+    auto* layer = processor.mData.getUISeqData()->getLayer(0);
+
+    for (int i = 0; i < SEQ_MAX_PATTERNS; ++i)
+    {
+        const juce::String name(layer->getPatternName(i));
+        const bool custom =
+            name.isNotEmpty() && name != juce::String(SEQ_DEFAULT_PAT_NAME);
+        patternSelector.changeItemText(
+            i + 1,
+            custom ? juce::String(i + 1) + ": " + name
+                   : "Pattern " + juce::String(i + 1));
+    }
 }
 
 void GgdDrumEditor::setActiveMap(int index)
@@ -938,6 +1383,38 @@ void GgdDrumEditor::setActiveMap(int index)
     activeMapIndex = index;
     applyActiveMapBindings(true);
     grid->setMap(&maps.getReference(activeMapIndex));
+}
+
+void GgdDrumEditor::performUndo()
+{
+    processor.mData.undo();
+    processor.mIncomingData.addToFifo(SEQ_NOTIFY_HOST, 0, 0);
+    refreshControlsFromModel();
+    grid->refreshSize();
+}
+
+void GgdDrumEditor::duplicateCurrentPattern()
+{
+    auto* seq = processor.mData.getUISeqData();
+    auto* layer = seq->getLayer(0);
+
+    const int source = layer->getCurrentPattern();
+    const int target = (source + 1) % SEQ_MAX_PATTERNS;
+    const juce::String sourceName(layer->getPatternName(source));
+
+    seq->copyPatternData(0, target, 0, source);
+
+    juce::String copyName =
+        sourceName == juce::String(SEQ_DEFAULT_PAT_NAME)
+            ? "Pattern " + juce::String(target + 1)
+            : sourceName + " copy";
+    copyName = copyName.substring(0, SEQ_PATTERN_NAME_MAXLEN - 1);
+    layer->setPatternName(copyName.toRawUTF8(), target);
+    layer->setCurrentPattern(target);
+
+    publishModelChange();
+    refreshControlsFromModel();
+    grid->repaint();
 }
 
 void GgdDrumEditor::publishModelChange()
@@ -955,6 +1432,19 @@ void GgdDrumEditor::clearCurrentPattern()
     grid->repaint();
 }
 
+void GgdDrumEditor::updatePersistenceTag()
+{
+    if (maps.isEmpty())
+        return;
+
+    auto* layer = processor.mData.getUISeqData()->getLayer(0);
+    const auto tag =
+        "GGD3:" + mapPersistenceToken(maps.getReference(activeMapIndex))
+        + ":" + juce::String(timeSigNumerator)
+        + "/" + juce::String(timeSigDenominator);
+    layer->setLayerName(tag.toRawUTF8());
+}
+
 juce::String GgdDrumEditor::mapPersistenceToken(const GgdKitMap& map) const
 {
     if (map.id.containsIgnoreCase(".pv."))
@@ -968,15 +1458,39 @@ juce::String GgdDrumEditor::mapPersistenceToken(const GgdKitMap& map) const
 
 int GgdDrumEditor::mapIndexFromLayerName(const juce::String& layerName) const
 {
-    if (!layerName.startsWith("GGD:") && !layerName.startsWith("GGD2:"))
+    if (!layerName.startsWith("GGD:")
+        && !layerName.startsWith("GGD2:")
+        && !layerName.startsWith("GGD3:"))
         return 0;
 
-    const auto token =
-        layerName.fromFirstOccurrenceOf(":", false, false).trim();
+    auto remainder = layerName.fromFirstOccurrenceOf(":", false, false);
+    const auto token = remainder.upToFirstOccurrenceOf(":", false, false).trim();
 
     for (int i = 0; i < maps.size(); ++i)
         if (mapPersistenceToken(maps.getReference(i)) == token)
             return i;
 
     return 0;
+}
+
+bool GgdDrumEditor::parseMeterFromLayerName(
+    const juce::String& layerName, int& numerator, int& denominator) const
+{
+    if (!layerName.startsWith("GGD3:"))
+        return false;
+
+    auto remainder = layerName.fromFirstOccurrenceOf(":", false, false);
+    remainder = remainder.fromFirstOccurrenceOf(":", false, false);
+    const auto numeratorText = remainder.upToFirstOccurrenceOf("/", false, false);
+    const auto denominatorText = remainder.fromFirstOccurrenceOf("/", false, false);
+
+    const int n = numeratorText.getIntValue();
+    const int d = denominatorText.getIntValue();
+
+    if (n < 1 || n > 16 || (d != 4 && d != 8 && d != 16))
+        return false;
+
+    numerator = n;
+    denominator = d;
+    return true;
 }

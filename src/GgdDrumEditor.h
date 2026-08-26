@@ -14,6 +14,7 @@ public:
 
     void paint(juce::Graphics& g) override;
     void resized() override;
+    bool keyPressed(const juce::KeyPress& key) override;
 
 private:
     SeqAudioProcessor& processor;
@@ -22,29 +23,50 @@ private:
     juce::Array<GgdKitMap> maps;
     juce::Array<GgdCanonicalRow> canonicalRows;
     int activeMapIndex = 0;
+    int timeSigNumerator = 4;
+    int timeSigDenominator = 4;
+    int activeBars = 1;
 
     juce::Label productLabel;
     juce::Label transportStatus;
     juce::Label hintLabel;
+    juce::Label meterLabel;
+    juce::Label meterSlash;
+    juce::Label barsLabel;
     juce::ComboBox kitSelector;
     juce::ComboBox patternSelector;
+    juce::ComboBox numeratorSelector;
+    juce::ComboBox denominatorSelector;
     juce::ComboBox barsSelector;
     juce::TextEditor patternName;
     juce::TextButton undoButton { "Undo" };
+    juce::TextButton duplicateButton { "Duplicate" };
     juce::TextButton clearButton { "Clear" };
     juce::Viewport gridViewport;
     std::unique_ptr<GgdDrumGrid> grid;
+
+    static constexpr int topAreaHeight = 104;
+    static constexpr int bottomAreaHeight = 36;
 
     void timerCallback() override;
     void configureLookAndFeel();
     void initialiseDrumState();
     void applyActiveMapBindings(bool publish);
+    void applyPatternGeometry(bool publish = true);
     void refreshControlsFromModel();
+    void rebuildBarsSelector();
+    void refreshPatternSelectorLabels();
     void setActiveMap(int index);
+    void performUndo();
+    void duplicateCurrentPattern();
     void publishModelChange();
     void clearCurrentPattern();
+    void updatePersistenceTag();
     juce::String mapPersistenceToken(const GgdKitMap& map) const;
     int mapIndexFromLayerName(const juce::String& layerName) const;
+    bool parseMeterFromLayerName(const juce::String& layerName,
+                                 int& numerator,
+                                 int& denominator) const;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(GgdDrumEditor)
 };

@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -52,17 +52,47 @@ jobs:
         shell: pwsh
         run: cmake --build build --target stochas_CLAP --parallel
 
-      - name: Stage artifact
+      - name: Stage packages
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force artifact | Out-Null
           Copy-Item "build/stochas_artefacts/Release/CLAP/Stochas GGD.clap" "artifact/Stochas GGD.clap"
+          Compress-Archive -Path "artifact/Stochas GGD.clap" -DestinationPath "artifact/Stochas-GGD-Windows.zip" -Force
           Get-ChildItem artifact
 
-      - name: Upload CLAP
+      - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: stochas-ggd-windows-clap
-          path: artifact/Stochas GGD.clap
+          name: stochas-ggd-windows-clap-pr-${{ github.event.pull_request.number || 'manual' }}-${{ github.run_number }}
+          path: |
+            artifact/Stochas GGD.clap
+            artifact/Stochas-GGD-Windows.zip
           if-no-files-found: error
           retention-days: 7
+
+      - name: Publish PR development build
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          $short = $env:HEAD_SHA.Substring(0, 7)
+          $tag = "pr-$($env:PR_NUMBER)-build-$($env:GITHUB_RUN_NUMBER)-$short"
+          $title = "Stochas GGD PR #$($env:PR_NUMBER) build $($env:GITHUB_RUN_NUMBER) ($short)"
+          $notes = "Automatic development build from PR #$env:PR_NUMBER.`n`nHead commit: $env:HEAD_SHA`nWindows CLAP build for testing. Development builds are prereleases and may be unstable."
+
+          if (-not (gh release view $tag 2>$null)) {
+            gh release create $tag `
+              --target $env:HEAD_SHA `
+              --title $title `
+              --prerelease `
+              --notes $notes
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+
+          gh release upload $tag `
+            "artifact/Stochas GGD.clap" `
+            "artifact/Stochas-GGD-Windows.zip" `
+            --clobber

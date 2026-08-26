@@ -80,12 +80,7 @@ jobs:
           $short = $env:GITHUB_SHA.Substring(0, 7)
           $tag = "build-$($env:GITHUB_RUN_NUMBER)-$short"
           $title = "Stochas GGD build $($env:GITHUB_RUN_NUMBER) ($short)"
-          $notes = @"
-          Automatic development build from `main`.
-
-          Commit: $env:GITHUB_SHA
-          Windows CLAP build for testing. Development builds are prereleases and may be unstable.
-          "@
+          $notes = "Automatic development build from main.`n`nCommit: $env:GITHUB_SHA`nWindows CLAP build for testing. Development builds are prereleases and may be unstable."
 
           if (-not (gh release view $tag 2>$null)) {
             gh release create $tag `

@@ -1,8 +1,9 @@
 #pragma once
 
-// PluginProcessor.cpp historically constructs SeqAudioProcessorEditor. Keep that
-// entry-point name as a tiny compatibility shim while the old Stochas editor is
-// retired from the build.
+// PluginProcessor.cpp historically constructs SeqAudioProcessorEditor and relied
+// on the old editor header to pull in EditorState's full definition. Keep both
+// details here while routing the actual editor to the new drum UI.
+#include "EditorState.h"
 #include "GgdDrumEditor.h"
 
 using SeqAudioProcessorEditor = GgdDrumEditor;

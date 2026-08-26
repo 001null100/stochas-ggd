@@ -77,7 +77,7 @@ public:
             {
                 const int bar = step / 16 + 1;
                 g.setColour(c(text));
-                g.setFont(12.0f, juce::Font::bold);
+                g.setFont(juce::Font(12.0f, juce::Font::bold));
                 g.drawText(juce::String(bar), x + 4, 3, stepWidth * 4 - 8, 18,
                            juce::Justification::centredLeft, false);
             }
@@ -111,7 +111,7 @@ public:
                 g.drawHorizontalLine(item.y + item.height - 1, 0.0f,
                                      static_cast<float>(getWidth()));
                 g.setColour(c(muted));
-                g.setFont(10.5f, juce::Font::bold);
+                g.setFont(juce::Font(10.5f, juce::Font::bold));
                 g.drawText(item.groupLabel.toUpperCase(), 18, item.y,
                            nameWidth - 24, item.height,
                            juce::Justification::centredLeft, false);
@@ -380,7 +380,7 @@ private:
             }
         }
 
-        const auto* layer = processor.mData.getUISeqData()->getLayer(0);
+        auto* layer = processor.mData.getUISeqData()->getLayer(0);
         const int width = std::max(840, nameWidth + layer->getNumSteps() * stepWidth + 24);
         setSize(width, std::max(320, y + 18));
     }
@@ -390,7 +390,7 @@ private:
         if (p.x < nameWidth || p.y < rulerHeight)
             return false;
 
-        const auto* layer = processor.mData.getUISeqData()->getLayer(0);
+        auto* layer = processor.mData.getUISeqData()->getLayer(0);
         step = static_cast<int>((p.x - nameWidth) / stepWidth);
         if (step < 0 || step >= layer->getNumSteps())
             return false;

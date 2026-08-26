@@ -90,7 +90,8 @@ bool GgdKitMapLibrary::parseMap(const juce::String& json,
 
                     GgdMidiBinding binding;
                     binding.kind = bindingObject->getProperty("kind").toString();
-                    binding.midi = static_cast<int>(bindingObject->getProperty("midi"));
+                    const auto midiValue = bindingObject->getProperty("midi");
+                    binding.midi = midiValue.isVoid() ? -1 : static_cast<int>(midiValue);
                     binding.noteName = bindingObject->getProperty("noteName").toString();
                     binding.role = bindingObject->getProperty("role").toString();
                     articulation.bindings.add(binding);

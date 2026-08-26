@@ -4,40 +4,62 @@ on:
   push:
     branches:
       - main
+    tags:
+      - 'v*'
   workflow_dispatch:
 
 permissions:
   contents: write
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+env:
+  SCCACHE_GHA_ENABLED: "true"
+  _CL_: "/Z7"
+
 jobs:
   build-windows-clap:
     name: Windows CLAP
-    runs-on: windows-latest
-    defaults:
-      run:
-        shell: bash
+    runs-on: windows-2025
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7.0.1
         with:
           submodules: recursive
+          fetch-depth: 1
+
+      - name: Set up MSVC command line
+        uses: ilammy/msvc-dev-cmd@v1.13.0
+        with:
+          arch: x64
+
+      - name: Set up compiler cache
+        uses: mozilla-actions/sccache-action@v0.0.11
 
       - name: Configure
+        shell: pwsh
         run: |
-          cmake -B build -A x64 \
-            -DSTOCHAS_VERSION="$(cat VERSION)" \
-            -DCMAKE_BUILD_TYPE=Release
+          $version = (Get-Content VERSION -Raw).Trim()
+          cmake -S . -B build -G Ninja `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DSTOCHAS_VERSION="$version" `
+            -DCMAKE_C_COMPILER_LAUNCHER=sccache `
+            -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
 
       - name: Build CLAP
-        run: cmake --build build --config Release --target stochas_CLAP --parallel
+        shell: pwsh
+        run: cmake --build build --target stochas_CLAP --parallel
 
       - name: Stage packages
+        shell: pwsh
         run: |
-          mkdir -p artifact
-          cp "build/stochas_artefacts/Release/CLAP/Stochas GGD.clap" "artifact/Stochas GGD.clap"
-          powershell -NoProfile -Command "Compress-Archive -Path 'artifact/Stochas GGD.clap' -DestinationPath 'artifact/Stochas-GGD-Windows.zip' -Force"
-          ls -lah artifact
+          New-Item -ItemType Directory -Force artifact | Out-Null
+          Copy-Item "build/stochas_artefacts/Release/CLAP/Stochas GGD.clap" "artifact/Stochas GGD.clap"
+          Compress-Archive -Path "artifact/Stochas GGD.clap" -DestinationPath "artifact/Stochas-GGD-Windows.zip" -Force
+          Get-ChildItem artifact
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
@@ -47,21 +69,31 @@ jobs:
             artifact/Stochas GGD.clap
             artifact/Stochas-GGD-Windows.zip
           if-no-files-found: error
+          retention-days: 7
 
-      - name: Publish alpha release
-        if: github.ref == 'refs/heads/main'
+      - name: Publish tagged release
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: v0.1.0-alpha.1
         run: |
-          if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            gh release create "$RELEASE_TAG" \
-              --target "$GITHUB_SHA" \
-              --title "Stochas GGD v0.1.0-alpha.1" \
-              --prerelease \
-              --notes "First testable Stochas GGD alpha. Includes the drum-focused editor, semantic GGD mappings for P V, P IV and Modern & Massive, 1-4 bar patterns, velocity and microtiming editing, kit remapping, eight pattern slots, undo/clear, and the existing Stochas sequencing engine underneath. Windows CLAP build."
-          fi
-          gh release upload "$RELEASE_TAG" \
-            "artifact/Stochas GGD.clap" \
-            "artifact/Stochas-GGD-Windows.zip" \
+          $tag = $env:GITHUB_REF_NAME
+
+          if (-not (gh release view $tag 2>$null)) {
+            $args = @(
+              'release', 'create', $tag,
+              '--verify-tag',
+              '--title', "Stochas GGD $tag",
+              '--generate-notes'
+            )
+            if ($tag -match '-') {
+              $args += '--prerelease'
+            }
+            & gh @args
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+
+          gh release upload $tag `
+            "artifact/Stochas GGD.clap" `
+            "artifact/Stochas-GGD-Windows.zip" `
             --clobber

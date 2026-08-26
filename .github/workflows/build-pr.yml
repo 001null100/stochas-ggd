@@ -7,34 +7,57 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  SCCACHE_GHA_ENABLED: "true"
+  # JUCE bootstraps juceaide as a Debug Ninja build. /Z7 keeps debug info in
+  # each object instead of sharing a compiler PDB, which avoids MSVC PDB races
+  # and makes those compilations cache-friendly.
+  _CL_: "/Z7"
+
 jobs:
   build-windows-clap:
     name: Windows CLAP
-    runs-on: windows-latest
-    defaults:
-      run:
-        shell: bash
+    runs-on: windows-2025
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7.0.1
         with:
           submodules: recursive
+          fetch-depth: 1
+
+      - name: Set up MSVC command line
+        uses: ilammy/msvc-dev-cmd@v1.13.0
+        with:
+          arch: x64
+
+      - name: Set up compiler cache
+        uses: mozilla-actions/sccache-action@v0.0.11
 
       - name: Configure
+        shell: pwsh
         run: |
-          cmake -B build -A x64 \
-            -DSTOCHAS_VERSION="$(cat VERSION)" \
-            -DCMAKE_BUILD_TYPE=Release
+          $version = (Get-Content VERSION -Raw).Trim()
+          cmake -S . -B build -G Ninja `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DSTOCHAS_VERSION="$version" `
+            -DCMAKE_C_COMPILER_LAUNCHER=sccache `
+            -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
 
       - name: Build CLAP
-        run: cmake --build build --config Release --target stochas_CLAP --parallel
+        shell: pwsh
+        run: cmake --build build --target stochas_CLAP --parallel
 
       - name: Stage artifact
+        shell: pwsh
         run: |
-          mkdir -p artifact
-          cp "build/stochas_artefacts/Release/CLAP/Stochas GGD.clap" "artifact/Stochas GGD.clap"
-          ls -lah artifact
+          New-Item -ItemType Directory -Force artifact | Out-Null
+          Copy-Item "build/stochas_artefacts/Release/CLAP/Stochas GGD.clap" "artifact/Stochas GGD.clap"
+          Get-ChildItem artifact
 
       - name: Upload CLAP
         uses: actions/upload-artifact@v4
@@ -42,3 +65,4 @@ jobs:
           name: stochas-ggd-windows-clap
           path: artifact/Stochas GGD.clap
           if-no-files-found: error
+          retention-days: 7

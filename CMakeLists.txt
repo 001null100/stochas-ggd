@@ -127,7 +127,6 @@ target_sources(stochas PRIVATE
     src/pcg_basic.c
     src/Persist.cpp
     src/PlayPanel.cpp
-    src/PluginEditor.cpp
     src/PluginProcessor.cpp
     src/Scale.cpp
     src/SeqRandom.cpp

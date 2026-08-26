@@ -1,10 +1,10 @@
 # This script has been adapted from the example script that comes with JUCE in the cmake example dir.
-# Original closed-source Stochas code used the projucer 
+# Original closed-source Stochas code used the projucer
 #
-# To build stochas:
+# To build stochas-ggd:
 #   git submodule update --init --recursive
-#   cmake -B build -DSTOCHAS_VERSION=xxx, etc.
-#   cmake --build build  --config Release
+#   cmake -B build -A x64 -DSTOCHAS_VERSION=xxx
+#   cmake --build build --config Release --target stochas_CLAP
 #
 cmake_minimum_required(VERSION 3.16)
 
@@ -29,40 +29,41 @@ if (UNIX AND NOT APPLE)
   set(STOCHAS_JACK 1)
 endif()
 
-project(Stochas VERSION ${STOCHAS_VERSION})
+project(StochasGGD VERSION ${STOCHAS_VERSION})
 
 option(STOCHAS_COPY_AFTER_BUILD FALSE "Copy after build")
 
 set(CMAKE_CXX_STANDARD 17)
 
-message( STATUS "Building Stochas with version ${STOCHAS_VERSION}" )
+message( STATUS "Building Stochas GGD with version ${STOCHAS_VERSION}" )
 if( APPLE )
   message( STATUS "Building using ${CMAKE_OSX_DEPLOYMENT_TARGET}" )
 endif()
 
 # synth defaults to true
-if (NOT DEFINED STOCHAS_IS_SYNTH)  
+if (NOT DEFINED STOCHAS_IS_SYNTH)
   set(STOCHAS_IS_SYNTH "TRUE")
 endif()
 
 # midi effect defaults to true
-# TRUE is needed for AU and AUv3 in order for proper functioning in Logic
-# but may have issues with other daw's. Specifically:
-# I had some problems in cubase when this was turned on.
-# Intermittent. It seems that when there are no output buffers it
-# can sometimes get garbage in its buffer. Turning this off, while it
-# causes the plugin to have a stereo out bus, seems to alleviate the problem.
-# to rep the problem start cubase, hit F11 add stochas as an instrument. right away
-# it starts producing a buzz (although not always)
-
-if (NOT DEFINED STOCHAS_IS_MIDI_EFFECT)  
+if (NOT DEFINED STOCHAS_IS_MIDI_EFFECT)
   set(STOCHAS_IS_MIDI_EFFECT "TRUE")
 endif()
 message( STATUS "Is Synth: ${STOCHAS_IS_SYNTH}, Is Midi Effect: ${STOCHAS_IS_MIDI_EFFECT}")
-# I'm not sure at this point whether this has any effect. I know etting it to "Instrument" causes it to show as
-# VSTi in reaper whereas setting it to "Effect" causes it to show as VST
-set(STOCHAS_CATEGORY "Effect") # original was "Instrument"
+set(STOCHAS_CATEGORY "Effect")
 add_subdirectory(lib/JUCE)
+
+# Keep the JSON files under maps/ggd authoritative while making them available
+# inside the plugin binary. This avoids relying on external map files at runtime.
+file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/geninclude")
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/maps/ggd/p-v.json" GGD_MAP_PV_JSON)
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/maps/ggd/p-iv.json" GGD_MAP_PIV_JSON)
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/maps/ggd/modern-and-massive.json" GGD_MAP_MM_JSON)
+configure_file(
+  "${CMAKE_CURRENT_SOURCE_DIR}/cmake/GgdBuiltInMaps.h.in"
+  "${CMAKE_BINARY_DIR}/geninclude/GgdBuiltInMaps.h"
+  @ONLY
+)
 
 add_custom_target( git-info BYPRODUCTS ${CMAKE_BINARY_DIR}/geninclude/version.cpp
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
@@ -81,40 +82,34 @@ if (DEFINED VST2_PATH)
   set(VST2 "VST")
 endif()
 
-# `juce_add_plugin` adds a static library target with the name passed as the first argument
-# (AudioPluginExample here). This target is a normal CMake target, but has a lot of extra properties set
-# up by default. As well as this shared code static library, this function adds targets for each of
-# the formats specified by the FORMATS arguments. This function accepts many optional arguments.
-# Check the readme at `docs/CMake API.md` in the JUCE repo for the full list.
-
 juce_add_plugin(stochas
-    COMPANY_NAME "Surge Synth Team"
-    BUNDLE_ID "org.surge-synth-team.stochas"
-    DESCRIPTION "Stochas Randomization Enabled Step Sequencer"
+    COMPANY_NAME "Stochas GGD"
+    BUNDLE_ID "local.stochas-ggd"
+    DESCRIPTION "GGD-focused drum pattern sequencer"
     ICON_BIG   "${CMAKE_CURRENT_SOURCE_DIR}/image/app_logo_512.png"
     IS_SYNTH ${STOCHAS_IS_SYNTH}
     NEEDS_MIDI_INPUT TRUE
     NEEDS_MIDI_OUTPUT TRUE
-    IS_MIDI_EFFECT ${STOCHAS_IS_MIDI_EFFECT}  
-    # EDITOR_WANTS_KEYBOARD_FOCUS TRUE/FALSE    # Does the editor need keyboard focus?
-    COPY_PLUGIN_AFTER_BUILD ${STOCHAS_COPY_AFTER_BUILD}        # Should the plugin be installed to a default location after building?
-    PLUGIN_MANUFACTURER_CODE AuVi               # allows compatibility with older patches from AV days
+    IS_MIDI_EFFECT ${STOCHAS_IS_MIDI_EFFECT}
+    COPY_PLUGIN_AFTER_BUILD ${STOCHAS_COPY_AFTER_BUILD}
+    PLUGIN_MANUFACTURER_CODE AuVi
     PLUGIN_CODE Stoc
-    FORMATS VST3 ${VST2} AU Standalone     # The formats to build. Other valid formats are: AAX Unity VST AU AUv3
+    FORMATS VST3 ${VST2} AU Standalone
     VST3_CATEGORIES ${STOCHAS_CATEGORY}
-    USE_LEGACY_COMPATIBILITY_PLUGIN_CODE TRUE #needed to maintain plugin code compatibility with what we've released
-    VST3_CAN_REPLACE_VST2 TRUE  #hopefully this will allow old projects to load
-    PRODUCT_NAME "Stochas")        # The name of the final executable, which can differ from the target name
+    USE_LEGACY_COMPATIBILITY_PLUGIN_CODE TRUE
+    VST3_CAN_REPLACE_VST2 TRUE
+    PRODUCT_NAME "Stochas GGD")
 
 add_subdirectory(lib/clap-juce-extensions EXCLUDE_FROM_ALL)
 clap_juce_extensions_plugin(TARGET stochas
-        CLAP_ID "org.surge-synth-team.stochas"
-        CLAP_FEATURES "note-effect" "sequencer" "stochastic")
+        CLAP_ID "local.stochas-ggd"
+        CLAP_FEATURES "note-effect" "sequencer")
 
-add_dependencies( stochas git-info )
-include_directories( src )
+add_dependencies(stochas git-info)
+include_directories(src)
+target_include_directories(stochas PRIVATE "${CMAKE_BINARY_DIR}/geninclude")
 
-juce_generate_juce_header(stochas)  
+juce_generate_juce_header(stochas)
 
 target_sources(stochas PRIVATE
     src/ChainDialog.cpp
@@ -122,6 +117,8 @@ target_sources(stochas PRIVATE
     src/EditDialog.cpp
     src/EditorState.cpp
     src/FileDialog.cpp
+    src/GgdDrumEditor.cpp
+    src/GgdKitMap.cpp
     src/HelpBanner.cpp
     src/InfoDialog.cpp
     src/MidiDialog.cpp
@@ -142,37 +139,18 @@ target_sources(stochas PRIVATE
     ${CMAKE_BINARY_DIR}/geninclude/version.cpp
     )
 
-# `target_compile_definitions` adds some preprocessor definitions to our target. In a Projucer
-# project, these might be passed in the 'Preprocessor Definitions' field. JUCE modules also make use
-# of compile definitions to switch certain features on/off, so if there's a particular feature you
-# need that's not on by default, check the module header for the correct flag to set here. These
-# definitions will be visible both to your code, and also the JUCE module code, so for new
-# definitions, pick unique names that are unlikely to collide! This is a standard CMake command.
-
 target_compile_definitions(stochas
     PUBLIC
-    # JUCE_WEB_BROWSER and JUCE_USE_CURL would be on by default, but you might not need them.
-    JUCE_WEB_BROWSER=0  # If you remove this, add `NEEDS_WEB_BROWSER TRUE` to the `juce_add_plugin` call
-    JUCE_USE_CURL=0     # If you remove this, add `NEEDS_CURL TRUE` to the `juce_add_plugin` call
+    JUCE_WEB_BROWSER=0
+    JUCE_USE_CURL=0
     JUCE_VST3_CAN_REPLACE_VST2=0
-
-    # GPL3 Plugs can disable splash screen
     JUCE_DISPLAY_SPLASH_SCREEN=0
     JUCE_REPORT_APP_USAGE=0
-
-    # Some linux options
     JUCE_JACK=${STOCHAS_JACK}
     JUCE_ALSA=1
 )
 
-# If your target needs extra binary assets, you can add them here. The first argument is the name of
-# a new static library target that will include all the binary resources. There is an optional
-# `NAMESPACE` argument that can specify the namespace of the generated binary data class. Finally,
-# the SOURCES argument should be followed by a list of source files that should be built into the
-# static library. These source files can be of any kind (wav data, images, fonts, icons etc.).
-# Conversion to binary-data will happen when your target is built.
-
-juce_add_binary_data(assets NAMESPACE SeqImageX SOURCES 
+juce_add_binary_data(assets NAMESPACE SeqImageX SOURCES
     image/exclamation-64.png
     image/not.png
     image/play.png
@@ -185,14 +163,8 @@ juce_add_binary_data(assets NAMESPACE SeqImageX SOURCES
 set_target_properties(assets PROPERTIES
     POSITION_INDEPENDENT_CODE TRUE)
 
-# `target_link_libraries` links libraries and JUCE modules to other libraries or executables. Here,
-# we're linking our executable target to the `juce::juce_audio_utils` module. Inter-module
-# dependencies are resolved automatically, so `juce_core`, `juce_events` and so on will also be
-# linked automatically. If we'd generated a binary data target above, we would need to link to it
-# here too. This is a standard CMake command.
-
 target_link_libraries(stochas PRIVATE
-  assets                             # to include our images
+  assets
   juce::juce_audio_utils
   juce::juce_audio_plugin_client
   )
@@ -205,8 +177,7 @@ if( APPLE )
     POST_BUILD
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
     COMMAND echo "Installing audio unit locally"
-    COMMAND rsync -r --delete "${ZIP_FROM_DIR}/AU/Stochas.component/" "\${HOME}/Library/Audio/Plug-Ins/Components/Stochas.component/"
+    COMMAND rsync -r --delete "${ZIP_FROM_DIR}/AU/Stochas GGD.component/" "\${HOME}/Library/Audio/Plug-Ins/Components/Stochas GGD.component/"
     COMMAND auval -vt aumi AuVi
     )
-
 endif()

@@ -17,6 +17,7 @@ concurrency:
 
 env:
   SCCACHE_GHA_ENABLED: "true"
+  _CL_: "/Z7"
 
 jobs:
   build-windows-clap:

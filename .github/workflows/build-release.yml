@@ -121,7 +121,7 @@ jobs:
           $args = @(
             'release', 'create', $tag,
             '--title', "Stochas GGD $tag",
-            '--generate-notes'
+            '--notes-file', 'RELEASE_NOTES.md'
           )
 
           if ($env:GITHUB_REF -notlike 'refs/tags/*') {

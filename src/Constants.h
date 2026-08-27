@@ -93,8 +93,9 @@ in mono mode are 0..high val where 0 is off, and the following applies
 // min/max steps we'd ever have. The GGD editor uses the larger ceiling for
 // long multi-bar drum patterns while keeping the original 16-step base grid.
 #define SEQ_MIN_STEPS         1 // also min steps per measure
-#define SEQ_MAX_STEPS         256
+#define SEQ_MAX_STEPS         1024
 #define SEQ_DEFAULT_NUM_STEPS 16 // this is also max steps per measure and steps per visible page
+#define SEQ_MAX_STEPS_PER_MEASURE 32
 // max rows we'd ever have is a chromatic progression of 0-127 (last row is off row)
 #define SEQ_MAX_ROWS          129
 #define SEQ_MAX_VISIBLE_ROWS  25

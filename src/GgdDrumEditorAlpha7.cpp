@@ -21,7 +21,6 @@ constexpr juce::uint32 accent      = 0xff70d6c1;
 constexpr juce::uint32 accent2     = 0xff3f9f90;
 constexpr juce::uint32 warm        = 0xffd6b470;
 
-constexpr int maxUserBars = 8;
 constexpr float defaultZoomScale = 1.25f;
 constexpr float detail32ZoomThreshold = 3.5f;
 
@@ -2236,15 +2235,7 @@ GgdDrumEditor::GgdDrumEditor(SeqAudioProcessor& p)
     addAndMakeVisible(patternSelector);
 
 
-    sourceMapSelector.addItem("Source: Auto", 1);
-    for (int i = 0; i < maps.size(); ++i)
-        sourceMapSelector.addItem("Source: " + maps.getReference(i).library, i + 2);
-    sourceMapSelector.setSelectedId(1, juce::dontSendNotification);
-    sourceMapSelector.setTooltip("MIDI groove source mapping. Auto chooses the built-in profile with the highest pitch coverage.");
-    sourceMapSelector.setWantsKeyboardFocus(false);
-    addAndMakeVisible(sourceMapSelector);
-
-    importMidiButton.setTooltip("Import a .mid/.midi groove into the current pattern with semantic GGD remapping");
+    importMidiButton.setTooltip("Import an official GGD Groove Player .mid/.midi file using the decoded kit translation table");
     importMidiButton.setWantsKeyboardFocus(false);
     importMidiButton.onClick = [this] { chooseMidiFile(); };
     addAndMakeVisible(importMidiButton);
@@ -2283,7 +2274,7 @@ GgdDrumEditor::GgdDrumEditor(SeqAudioProcessor& p)
     meterLabel.setColour(juce::Label::textColourId, c(muted));
     addAndMakeVisible(meterLabel);
 
-    for (int numerator = 1; numerator <= 16; ++numerator)
+    for (int numerator = 1; numerator <= SEQ_MAX_STEPS_PER_MEASURE; ++numerator)
         numeratorSelector.addItem(juce::String(numerator), numerator);
     numeratorSelector.setTooltip("Time signature numerator");
     numeratorSelector.setMouseClickGrabsKeyboardFocus(false);
@@ -2325,18 +2316,20 @@ GgdDrumEditor::GgdDrumEditor(SeqAudioProcessor& p)
     barsLabel.setColour(juce::Label::textColourId, c(muted));
     addAndMakeVisible(barsLabel);
 
-    barsSelector.setTooltip("Pattern length in bars");
-    barsSelector.setMouseClickGrabsKeyboardFocus(false);
-    barsSelector.onChange = [this]
+    barsEditor.setMultiLine(false);
+    barsEditor.setReturnKeyStartsNewLine(false);
+    barsEditor.setInputRestrictions(4, "0123456789");
+    barsEditor.setJustification(juce::Justification::centred);
+    barsEditor.setTooltip("Pattern length in bars. The maximum is derived from the current meter and the 1024-step engine capacity.");
+    barsEditor.onReturnKey = [this]
     {
-        const int bars = barsSelector.getSelectedId();
-        if (bars > 0)
-        {
-            activeBars = bars;
-            applyPatternGeometry();
-        }
+        commitBarCountEditor();
+        barsEditor.giveAwayKeyboardFocus();
+        if (grid != nullptr)
+            grid->grabKeyboardFocus();
     };
-    addAndMakeVisible(barsSelector);
+    barsEditor.onFocusLost = [this] { commitBarCountEditor(); };
+    addAndMakeVisible(barsEditor);
 
     zoomLabel.setText("ZOOM", juce::dontSendNotification);
     zoomLabel.setFont(juce::Font(10.0f, juce::Font::bold));
@@ -2524,9 +2517,7 @@ void GgdDrumEditor::resized()
     first.removeFromLeft(gap);
     patternSelector.setBounds(first.removeFromLeft(142).reduced(0, 5));
     first.removeFromLeft(gap);
-    sourceMapSelector.setBounds(first.removeFromLeft(126).reduced(0, 5));
-    first.removeFromLeft(5);
-    importMidiButton.setBounds(first.removeFromLeft(78).reduced(0, 5));
+    importMidiButton.setBounds(first.removeFromLeft(92).reduced(0, 5));
     first.removeFromLeft(gap);
     patternName.setBounds(first.reduced(0, 5));
 
@@ -2550,7 +2541,7 @@ void GgdDrumEditor::resized()
     second.removeFromLeft(9);
 
     barsLabel.setBounds(second.removeFromLeft(45));
-    barsSelector.setBounds(second.removeFromLeft(78).reduced(0, 5));
+    barsEditor.setBounds(second.removeFromLeft(64).reduced(0, 5));
     second.removeFromLeft(10);
 
     zoomLabel.setBounds(second.removeFromLeft(36));
@@ -2576,10 +2567,11 @@ void GgdDrumEditor::timerCallback()
     const int pos = processor.mNotifier.getPlayPosition(0);
     grid->setPlayPosition(pos);
 
+    const bool textEntryActive =
+        patternName.hasKeyboardFocus(true) || barsEditor.hasKeyboardFocus(true);
     const bool shortcutSurfaceActive =
-        !patternName.hasKeyboardFocus(true)
-        && (grid->hasKeyboardFocus(true) || isMouseOverOrDragging(true));
-    grid->pollFallbackShortcuts((shortcutSurfaceActive) && !patternName.hasKeyboardFocus(true));
+        !textEntryActive && (grid->hasKeyboardFocus(true) || isMouseOverOrDragging(true));
+    grid->pollFallbackShortcuts(shortcutSurfaceActive);
 
     if (pos >= 0)
     {
@@ -2636,8 +2628,9 @@ void GgdDrumEditor::initialiseDrumState()
             parseMeterFromLayerName(oldLayerName, timeSigNumerator, timeSigDenominator);
 
         const int oldStepsPerBar = stepsPerBarForMeter(timeSigNumerator, timeSigDenominator);
+        const int maxBarsForMeter = juce::jmax(1, SEQ_MAX_STEPS / oldStepsPerBar);
         preservedBars = juce::jlimit(
-            1, maxUserBars,
+            1, maxBarsForMeter,
             juce::jmax(1, (layer->getNumSteps() + oldStepsPerBar - 1) / oldStepsPerBar));
     }
 
@@ -2697,12 +2690,12 @@ void GgdDrumEditor::applyPatternGeometry(bool publish)
     if (maps.isEmpty())
         return;
 
-    timeSigNumerator = juce::jlimit(1, 16, timeSigNumerator);
+    timeSigNumerator = juce::jlimit(1, SEQ_MAX_STEPS_PER_MEASURE, timeSigNumerator);
     if (timeSigDenominator != 4 && timeSigDenominator != 8 && timeSigDenominator != 16)
         timeSigDenominator = 4;
 
     const int stepsPerBar = stepsPerBarForMeter(timeSigNumerator, timeSigDenominator);
-    const int maxBars = juce::jlimit(1, maxUserBars, SEQ_MAX_STEPS / stepsPerBar);
+    const int maxBars = juce::jmax(1, SEQ_MAX_STEPS / stepsPerBar);
     activeBars = juce::jlimit(1, maxBars, activeBars);
 
     auto* layer = processor.mData.getUISeqData()->getLayer(0);
@@ -2711,7 +2704,10 @@ void GgdDrumEditor::applyPatternGeometry(bool publish)
     layer->setNumSteps(activeBars * stepsPerBar);
     updatePersistenceTag();
 
-    rebuildBarsSelector();
+    barsEditor.setText(juce::String(activeBars), false);
+    barsEditor.setTooltip(
+        "Pattern length in bars. Current meter allows 1-" + juce::String(maxBars)
+        + " bars within the 1024-step engine capacity.");
     if (grid != nullptr)
     {
         grid->setMeter(timeSigNumerator, timeSigDenominator);
@@ -2737,7 +2733,7 @@ void GgdDrumEditor::refreshControlsFromModel()
     parseMeterFromLayerName(layerName, timeSigNumerator, timeSigDenominator);
 
     const int stepsPerBar = stepsPerBarForMeter(timeSigNumerator, timeSigDenominator);
-    const int maxBars = juce::jlimit(1, maxUserBars, SEQ_MAX_STEPS / stepsPerBar);
+    const int maxBars = juce::jmax(1, SEQ_MAX_STEPS / stepsPerBar);
     activeBars = juce::jlimit(
         1, maxBars,
         juce::jmax(1, (layer->getNumSteps() + stepsPerBar - 1) / stepsPerBar));
@@ -2751,8 +2747,10 @@ void GgdDrumEditor::refreshControlsFromModel()
     const int denominatorId = timeSigDenominator == 4 ? 1 : timeSigDenominator == 8 ? 2 : 3;
     denominatorSelector.setSelectedId(denominatorId, juce::dontSendNotification);
 
-    rebuildBarsSelector();
-    barsSelector.setSelectedId(activeBars, juce::dontSendNotification);
+    barsEditor.setText(juce::String(activeBars), false);
+    barsEditor.setTooltip(
+        "Pattern length in bars. Current meter allows 1-" + juce::String(maxBars)
+        + " bars within the 1024-step engine capacity.");
     refreshPatternSelectorLabels();
 
     grid->setMeter(timeSigNumerator, timeSigDenominator);
@@ -2760,18 +2758,21 @@ void GgdDrumEditor::refreshControlsFromModel()
     refreshZoomControls(grid->getZoomScale());
 }
 
-void GgdDrumEditor::rebuildBarsSelector()
+void GgdDrumEditor::commitBarCountEditor()
 {
     const int stepsPerBar = stepsPerBarForMeter(timeSigNumerator, timeSigDenominator);
-    const int maxBars = juce::jlimit(1, maxUserBars, SEQ_MAX_STEPS / stepsPerBar);
+    const int maxBars = juce::jmax(1, SEQ_MAX_STEPS / stepsPerBar);
+    const int requested = barsEditor.getText().getIntValue();
 
-    barsSelector.clear(juce::dontSendNotification);
-    for (int bars = 1; bars <= maxBars; ++bars)
-        barsSelector.addItem(
-            juce::String(bars) + (bars == 1 ? " bar" : " bars"), bars);
+    if (requested <= 0)
+    {
+        barsEditor.setText(juce::String(activeBars), false);
+        return;
+    }
 
-    barsSelector.setSelectedId(
-        juce::jlimit(1, maxBars, activeBars), juce::dontSendNotification);
+    activeBars = juce::jlimit(1, maxBars, requested);
+    barsEditor.setText(juce::String(activeBars), false);
+    applyPatternGeometry();
 }
 
 void GgdDrumEditor::refreshPatternSelectorLabels()
@@ -2845,10 +2846,11 @@ void GgdDrumEditor::chooseMidiFile()
 
 void GgdDrumEditor::importMidiFile(const juce::File& file)
 {
-    const int selectedSource = sourceMapSelector.getSelectedId();
-    const int forcedSource = selectedSource <= 1 ? -1 : selectedSource - 2;
+    if (maps.isEmpty() || activeMapIndex < 0 || activeMapIndex >= maps.size())
+        return;
+
     auto result = GgdMidiImporter::parseFile(
-        file, maps, canonicalRows, forcedSource, maxUserBars);
+        file, maps.getReference(activeMapIndex), canonicalRows, SEQ_MAX_STEPS);
 
     if (!result.ok)
     {
@@ -2943,8 +2945,8 @@ void GgdDrumEditor::applyMidiImport(const GgdMidiImportResult& result)
     hintLabel.setText(summary.substring(0, 220), juce::dontSendNotification);
     hintLabel.setTooltip(summary);
 
-    if (result.unresolvedNotes > 0 || result.collisions > 0
-        || result.truncatedNotes > 0 || result.sourceConfidence < 0.85f)
+    if (result.unresolvedNotes > 0 || result.fallbackNotes > 0
+        || result.collisions > 0 || result.truncatedNotes > 0)
     {
         juce::AlertWindow::showAsync(
             juce::MessageBoxOptions()
@@ -3025,7 +3027,7 @@ bool GgdDrumEditor::parseMeterFromLayerName(
     const int n = numeratorText.getIntValue();
     const int d = denominatorText.getIntValue();
 
-    if (n < 1 || n > 16 || (d != 4 && d != 8 && d != 16))
+    if (n < 1 || n > SEQ_MAX_STEPS_PER_MEASURE || (d != 4 && d != 8 && d != 16))
         return false;
 
     numerator = n;

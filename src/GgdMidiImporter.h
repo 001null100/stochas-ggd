@@ -1,7 +1,6 @@
 #pragma once
 
 #include <JuceHeader.h>
-#include <vector>
 #include "GgdKitMap.h"
 
 struct GgdImportedCell
@@ -18,10 +17,7 @@ struct GgdMidiImportResult
     bool ok = false;
     juce::String error;
     juce::String fileName;
-
-    int sourceMapIndex = -1;
-    juce::String sourceMapName;
-    float sourceConfidence = 0.0f;
+    juce::String formatName { "GGD Groove Player" };
 
     int numerator = 4;
     int denominator = 4;
@@ -30,6 +26,7 @@ struct GgdMidiImportResult
 
     int totalNotes = 0;
     int mappedNotes = 0;
+    int fallbackNotes = 0;
     int unresolvedNotes = 0;
     int collisions = 0;
     int truncatedNotes = 0;
@@ -42,11 +39,9 @@ struct GgdMidiImportResult
 class GgdMidiImporter
 {
 public:
-    // forcedSourceMap: -1 = auto detect, otherwise index into maps.
     static GgdMidiImportResult parseFile(
         const juce::File& file,
-        const juce::Array<GgdKitMap>& maps,
+        const GgdKitMap& destinationMap,
         const juce::Array<GgdCanonicalRow>& canonicalRows,
-        int forcedSourceMap,
-        int maxBars);
+        int maxSteps);
 };

@@ -40,8 +40,7 @@ private:
     juce::ComboBox patternSelector;
     juce::ComboBox numeratorSelector;
     juce::ComboBox denominatorSelector;
-    juce::ComboBox barsSelector;
-    juce::ComboBox sourceMapSelector;
+    juce::TextEditor barsEditor;
     juce::TextEditor patternName;
     juce::TextButton drawModeButton { "Draw" };
     juce::TextButton selectModeButton { "Select" };
@@ -64,7 +63,7 @@ private:
     void applyActiveMapBindings(bool publish);
     void applyPatternGeometry(bool publish = true);
     void refreshControlsFromModel();
-    void rebuildBarsSelector();
+    void commitBarCountEditor();
     void refreshPatternSelectorLabels();
     void refreshZoomControls(float scale);
     void setActiveMap(int index);

@@ -3,8 +3,8 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
-#include <map>
 #include <limits>
+#include <map>
 #include <set>
 
 namespace
@@ -20,6 +20,20 @@ struct ReverseMap
 {
     std::array<juce::String, 128> semantic;
     std::array<bool, 128> primary{};
+};
+
+struct PitchTranslation
+{
+    int destinationMidi = -1;
+    bool fallback = false;
+};
+
+enum class DestinationKit
+{
+    pv,
+    piv,
+    modernMassive,
+    unknown
 };
 
 ReverseMap buildReverseMap(const GgdKitMap& map)
@@ -51,15 +65,156 @@ ReverseMap buildReverseMap(const GgdKitMap& map)
     return result;
 }
 
+DestinationKit destinationKitFor(const GgdKitMap& map)
+{
+    if (map.id.containsIgnoreCase(".piv."))
+        return DestinationKit::piv;
+    if (map.id.containsIgnoreCase(".pv."))
+        return DestinationKit::pv;
+    if (map.id.containsIgnoreCase("modern"))
+        return DestinationKit::modernMassive;
+    return DestinationKit::unknown;
+}
+
 bool isSupportedMeter(int numerator, int denominator)
 {
-    return numerator >= 1 && numerator <= 16
+    return numerator >= 1 && numerator <= 32
         && (denominator == 4 || denominator == 8 || denominator == 16);
 }
 
 int stepsPerBar(int numerator, int denominator)
 {
     return juce::jmax(1, numerator * 16 / denominator);
+}
+
+PitchTranslation translatePv(int source)
+{
+    switch (source)
+    {
+        case 10: return { 43, false };
+        case 24: return { 44, false };
+        case 36: return { 24, false };
+        case 37: return { 30, false };
+        case 38: return { 26, false };
+        case 41: return { 35, false };
+        case 42: return { 42, false };
+        case 43: return { 34, false };
+        case 44: return { 48, false };
+        case 46: return { 46, false };
+        case 48: return { 33, false };
+        case 49: return { 52, false };
+        case 50: return { 33, false };
+        case 51: return { 62, false };
+        case 52: return { 77, false };
+        case 53: return { 61, false };
+        case 54: return { 44, false };
+        case 55: return { 65, false };
+        case 57: return { 54, false };
+        case 58: return { 45, false };
+        case 62: return { 44, false };
+        case 64: return { 73, false };
+        case 70: return { 47, false };
+        case 74: return { 56, false };
+
+        // Extremely rare Groove Player pitches. These meanings were decoded
+        // against Modern & Massive, then intentionally reduced to the closest
+        // articulation available in P V.
+        case 25: return { 45, true }; // Hat Open0 -> Open1
+        case 39: return { 26, true }; // Snare ruff -> Snare hit
+        case 59: return { 62, true }; // Ride crash -> Ride bow
+        case 95: return { 55, true }; // Right crash choke
+        default: return {};
+    }
+}
+
+PitchTranslation translatePiv(int source)
+{
+    switch (source)
+    {
+        case 10: return { 43, false };
+        case 24: return { 44, false };
+        case 36: return { 24, false };
+        case 37: return { 30, false };
+        case 38: return { 26, false };
+        case 41: return { 36, false };
+        case 42: return { 42, false };
+        case 43: return { 36, false };
+        case 44: return { 48, false };
+        case 46: return { 46, false };
+        case 48: return { 34, false };
+        case 49: return { 52, false };
+        case 50: return { 33, false };
+        case 51: return { 62, false };
+        case 52: return { 65, false };
+        case 53: return { 61, false };
+        case 54: return { 44, false };
+        case 55: return { 73, false };
+        case 57: return { 54, false };
+        case 58: return { 45, false };
+        case 62: return { 44, false };
+        case 64: return { 73, false };
+        case 70: return { 47, false };
+        case 74: return { 65, false };
+
+        case 25: return { 45, true }; // Hat Open0 -> Open1
+        case 39: return { 28, true }; // Snare ruff
+        case 59: return { 62, true }; // Ride crash -> Ride bow
+        case 95: return { 55, true }; // Right crash choke
+        default: return {};
+    }
+}
+
+PitchTranslation translateModernMassive(int source)
+{
+    switch (source)
+    {
+        case 10: return { 47, false };
+        case 24: return { 48, false };
+        case 25: return { 53, false };
+        case 36: return { 24, false };
+        case 37: return { 30, false };
+        case 38: return { 26, false };
+        case 39: return { 28, false };
+        case 41: return { 39, false };
+        case 42: return { 45, false };
+        case 43: return { 37, false };
+        case 44: return { 43, false };
+        case 46: return { 54, false };
+        case 48: return { 37, false };
+        case 49: return { 62, false };
+        case 50: return { 33, false };
+        case 51: return { 72, false };
+        case 52: return { 76, false };
+        case 53: return { 74, false };
+        case 54: return { 47, false };
+        case 55: return { 83, false };
+        case 57: return { 67, false };
+        case 58: return { 54, false };
+        case 59: return { 73, false };
+        case 62: return { 45, false };
+        case 64: return { 83, false };
+        case 70: return { 56, false };
+        case 74: return { 76, false };
+        case 95: return { 69, false };
+        default: return {};
+    }
+}
+
+PitchTranslation translatePitch(DestinationKit kit, int source)
+{
+    // Source 85 is deliberately not translated. In the GGD remap probe it
+    // produced MIDI note 0 alongside a hat event, which is not a meaningful
+    // destination articulation and is safer to report than to invent.
+    if (source == 85)
+        return {};
+
+    switch (kit)
+    {
+        case DestinationKit::pv:            return translatePv(source);
+        case DestinationKit::piv:           return translatePiv(source);
+        case DestinationKit::modernMassive: return translateModernMassive(source);
+        default:                            return {};
+    }
 }
 }
 
@@ -69,12 +224,17 @@ juce::String GgdMidiImportResult::summary() const
         return error;
 
     juce::String text;
-    text << "Imported " << mappedNotes << "/" << totalNotes << " notes using "
-         << sourceMapName << " (" << juce::String(sourceConfidence * 100.0f, 0) << "% coverage)";
+    text << formatName << " | "
+         << mappedNotes << "/" << totalNotes << " notes mapped | "
+         << bars << (bars == 1 ? " bar" : " bars") << " | "
+         << numerator << "/" << denominator;
+
+    if (fallbackNotes > 0)
+        text << " | " << fallbackNotes << " fallback" << (fallbackNotes == 1 ? "" : "s");
 
     if (unresolvedNotes > 0)
     {
-        text << ". Unresolved: " << unresolvedNotes << " note" << (unresolvedNotes == 1 ? "" : "s") << " [";
+        text << " | unresolved " << unresolvedNotes << " [";
         for (int i = 0; i < unresolvedPitches.size(); ++i)
         {
             if (i != 0)
@@ -85,23 +245,20 @@ juce::String GgdMidiImportResult::summary() const
     }
 
     if (collisions > 0)
-        text << ". " << collisions << " same-cell flam/retrigger collision" << (collisions == 1 ? "" : "s") << " compacted";
+        text << " | " << collisions << " retrigger collision"
+             << (collisions == 1 ? "" : "s");
 
     if (truncatedNotes > 0)
-        text << ". " << truncatedNotes << " note" << (truncatedNotes == 1 ? "" : "s") << " beyond the " << bars << "-bar limit skipped";
-
-    if (!meterSupported)
-        text << ". Meter metadata is not supported by the editor";
+        text << " | " << truncatedNotes << " truncated";
 
     return text;
 }
 
 GgdMidiImportResult GgdMidiImporter::parseFile(
     const juce::File& file,
-    const juce::Array<GgdKitMap>& maps,
+    const GgdKitMap& destinationMap,
     const juce::Array<GgdCanonicalRow>& canonicalRows,
-    int forcedSourceMap,
-    int maxBars)
+    int maxSteps)
 {
     GgdMidiImportResult result;
     result.fileName = file.getFileNameWithoutExtension();
@@ -112,9 +269,16 @@ GgdMidiImportResult GgdMidiImporter::parseFile(
         return result;
     }
 
-    if (maps.isEmpty() || canonicalRows.isEmpty())
+    if (canonicalRows.isEmpty())
     {
-        result.error = "No drum mappings are available.";
+        result.error = "No drum articulations are available.";
+        return result;
+    }
+
+    const auto destinationKit = destinationKitFor(destinationMap);
+    if (destinationKit == DestinationKit::unknown)
+    {
+        result.error = "The selected destination kit does not have a GGD Groove Player translation table.";
         return result;
     }
 
@@ -135,7 +299,7 @@ GgdMidiImportResult GgdMidiImporter::parseFile(
     const int ppq = midi.getTimeFormat();
     if (ppq <= 0)
     {
-        result.error = "SMPTE-timed MIDI files are not supported yet. Use a PPQ MIDI file.";
+        result.error = "SMPTE-timed MIDI files are not supported. Use a PPQ MIDI file.";
         return result;
     }
 
@@ -200,7 +364,9 @@ GgdMidiImportResult GgdMidiImporter::parseFile(
     {
         if (a.quarter != b.quarter)
             return a.quarter < b.quarter;
-        return a.note < b.note;
+        if (a.note != b.note)
+            return a.note < b.note;
+        return a.velocity < b.velocity;
     });
 
     result.totalNotes = static_cast<int>(rawNotes.size());
@@ -208,82 +374,48 @@ GgdMidiImportResult GgdMidiImporter::parseFile(
     result.denominator = firstDenominator;
     result.meterSupported = isSupportedMeter(result.numerator, result.denominator) && !meterChanges;
 
-    std::vector<ReverseMap> reverseMaps;
-    reverseMaps.reserve(static_cast<size_t>(maps.size()));
-    for (const auto& map : maps)
-        reverseMaps.push_back(buildReverseMap(map));
-
-    auto scoreMap = [&](int mapIndex)
-    {
-        int mapped = 0;
-        std::set<int> distinct;
-        const auto& reverse = reverseMaps[static_cast<size_t>(mapIndex)];
-        for (const auto& note : rawNotes)
-        {
-            if (note.note >= 0 && note.note <= 127
-                && reverse.semantic[static_cast<size_t>(note.note)].isNotEmpty())
-            {
-                ++mapped;
-                distinct.insert(note.note);
-            }
-        }
-        return std::pair<int, int>(mapped, static_cast<int>(distinct.size()));
-    };
-
-    if (forcedSourceMap >= 0 && forcedSourceMap < maps.size())
-    {
-        result.sourceMapIndex = forcedSourceMap;
-    }
-    else
-    {
-        std::pair<int, int> bestScore { -1, -1 };
-        for (int mapIndex = 0; mapIndex < maps.size(); ++mapIndex)
-        {
-            const auto score = scoreMap(mapIndex);
-            if (score > bestScore)
-            {
-                bestScore = score;
-                result.sourceMapIndex = mapIndex;
-            }
-        }
-    }
-
-    if (result.sourceMapIndex < 0)
-    {
-        result.error = "Could not choose a source mapping profile.";
-        return result;
-    }
-
-    const auto sourceScore = scoreMap(result.sourceMapIndex);
-    result.sourceMapName = maps.getReference(result.sourceMapIndex).library;
-    result.sourceConfidence = result.totalNotes > 0
-        ? static_cast<float>(sourceScore.first) / static_cast<float>(result.totalNotes)
-        : 0.0f;
-
     if (!result.meterSupported)
     {
         if (meterChanges)
-            result.error = "This MIDI file changes time signature mid-pattern. Meter changes are not supported yet.";
+            result.error = "This MIDI file changes time signature inside the groove. Meter changes are not supported yet.";
         else
-            result.error = "This MIDI file uses an unsupported time signature: "
-                         + juce::String(result.numerator) + "/" + juce::String(result.denominator) + ".";
+            result.error = "Unsupported time signature: "
+                         + juce::String(result.numerator) + "/" + juce::String(result.denominator)
+                         + ". The editor currently supports denominators 4, 8 and 16 with numerators up to 32.";
         return result;
     }
 
+    const int barSteps = stepsPerBar(result.numerator, result.denominator);
+    if (barSteps > maxSteps)
+    {
+        result.error = "The selected time signature is wider than the engine capacity.";
+        return result;
+    }
+    const int maxBars = juce::jmax(1, maxSteps / barSteps);
     const double barLengthQuarters = static_cast<double>(result.numerator) * 4.0
                                    / static_cast<double>(result.denominator);
     const double latestQuarter = rawNotes.back().quarter;
-    const int requestedBars = juce::jmax(1, static_cast<int>(std::floor(latestQuarter / barLengthQuarters)) + 1);
-    result.bars = juce::jlimit(1, juce::jmax(1, maxBars), requestedBars);
-    const int totalSteps = result.bars * stepsPerBar(result.numerator, result.denominator);
+    const int requestedBars = juce::jmax(
+        1, static_cast<int>(std::floor(latestQuarter / barLengthQuarters)) + 1);
 
-    const auto& reverse = reverseMaps[static_cast<size_t>(result.sourceMapIndex)];
+    result.bars = juce::jmin(requestedBars, maxBars);
+    const int totalSteps = result.bars * barSteps;
+
+    const auto reverse = buildReverseMap(destinationMap);
     std::set<int> unresolved;
     std::map<std::pair<int, int>, GgdImportedCell> cells;
 
     for (const auto& raw : rawNotes)
     {
-        const auto semantic = reverse.semantic[static_cast<size_t>(raw.note)];
+        const auto translation = translatePitch(destinationKit, raw.note);
+        if (translation.destinationMidi < 0 || translation.destinationMidi > 127)
+        {
+            ++result.unresolvedNotes;
+            unresolved.insert(raw.note);
+            continue;
+        }
+
+        const auto semantic = reverse.semantic[static_cast<size_t>(translation.destinationMidi)];
         if (semantic.isEmpty())
         {
             ++result.unresolvedNotes;
@@ -307,8 +439,14 @@ GgdMidiImportResult GgdMidiImporter::parseFile(
             continue;
         }
 
-        const int offset = juce::jlimit(-50, 50,
-            static_cast<int>(std::round((stepPosition - static_cast<double>(step)) * 100.0)));
+        if (translation.fallback)
+            ++result.fallbackNotes;
+
+        const int offset = juce::jlimit(
+            -50, 50,
+            static_cast<int>(std::round(
+                (stepPosition - static_cast<double>(step)) * 100.0)));
+
         const auto key = std::make_pair(canonicalRow, step);
         auto found = cells.find(key);
 
@@ -344,8 +482,8 @@ GgdMidiImportResult GgdMidiImporter::parseFile(
 
     if (result.mappedNotes == 0)
     {
-        result.error = "No notes could be mapped with source profile '" + result.sourceMapName
-                     + "'. Choose another source profile and try again.";
+        result.error = "No notes matched the GGD Groove Player mapping for "
+                     + destinationMap.library + ".";
         return result;
     }
 

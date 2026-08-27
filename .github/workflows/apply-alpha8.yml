@@ -1,0 +1,31 @@
+name: Apply alpha8 source migration
+
+on:
+  push:
+    branches:
+      - feature/alpha8-capacity-groove-import
+    paths:
+      - tools/apply_alpha8.py
+      - .github/workflows/apply-alpha8.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: ${{ github.actor != 'github-actions[bot]' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Apply migration
+        run: python tools/apply_alpha8.py
+      - name: Commit generated implementation
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Alpha 8: expand sequence capacity and rebuild GGD import"
+          git push

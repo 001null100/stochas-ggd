@@ -1,28 +1,29 @@
-# Stochas GGD v0.1.0-alpha.4
+# Stochas GGD v0.1.0-alpha.5
 
-This alpha focuses on making the timeline grid read more naturally at normal zoom while giving the extreme zoom range a useful purpose.
+Alpha.5 turns the grid into a more complete drum editor rather than only a drawing surface.
 
-## Working scale and detail grid
+## Draw and Select/Edit modes
 
-- 125% is now the default working zoom and the reset target.
-- 1/16 remains the normal editing grid through ordinary zoom levels.
-- At 350% and above, the editor switches to a playable 1/32 detail grid.
-- A hit on the second 1/32 uses the engine's existing +50% step offset.
-- Two adjacent 1/32 hits use the existing x2 retrigger timing, so the feature does not require a new sequencer clock or project-data migration.
-- In detail mode those x2 events are drawn as two concrete hit bodies rather than an abstract x2 badge.
+- Added explicit Draw and Select tools, switchable with D and S while the editor has keyboard focus.
+- Select mode supports click selection, Shift-add/toggle, marquee selection, dragging selections in time or between visible articulation rows, arrow-key nudging, Delete/Backspace, Ctrl+A and Ctrl+D when the host forwards those keys.
+- Selected hits receive a clear outline and drag moves show a destination preview.
+- Moves preserve velocity, probability, timing offsets and retrigger data and refuse to overwrite unrelated occupied cells.
+- Alt+wheel over a selected hit adjusts the whole selection's velocity relatively, preserving the dynamics between hits.
 
-## Grid hierarchy
+## Editing feedback
 
-- Bar boundaries are the strongest vertical markers.
-- Beat boundaries are full-height and clearly stronger than subdivisions.
-- 1/16 subdivisions use short local ticks so they remain visible without turning the grid into graph paper.
-- 1/32 midpoint ticks only appear in detail mode and are deliberately lighter.
-- The ruler uses the same bar > beat > 1/16 > 1/32 hierarchy.
+- Velocity editing now shows the exact 1-127 value in a compact popup above the hit during Shift-drag and after Alt+wheel adjustments.
+- Ctrl+Z is still accepted if a host forwards it, but Bitwig intercepts it before the plugin. Plain U is now the plugin-local undo shortcut alongside the Undo button.
 
-## Drum-family hierarchy
+## Transport
 
-- Instrument-family headers are taller and visually heavier.
-- Group tops use a stronger accent boundary and the bottoms use a clearer separator.
-- Sticky labels mirror the same hierarchy, making Kick, Snare, Toms, Hats and cymbal families easier to scan while scrolling.
+- Replaced the subdivision-jumping playback highlight with a thin interpolated playhead rendered at 60 Hz.
+- The editor measures the engine's step-transition interval and interpolates between reported positions, keeping the audio engine untouched while producing visibly smoother motion.
 
-Existing velocity, microtiming, ghost-note, roll, hat-articulation, scrolling and pointer-anchored zoom gestures remain intact.
+## Zoom
+
+- Zoom now snaps to 25% increments from 50% to 400%.
+- Ctrl+wheel moves one 25% interval per gesture.
+- 125% remains the default and the existing 350%+ 1/32 detail mode is unchanged.
+
+The existing GGD semantic mappings, MIDI passthrough, arbitrary meter support, eight-bar patterns, ghost notes, rolls, microtiming and hat-articulation workflow remain intact.

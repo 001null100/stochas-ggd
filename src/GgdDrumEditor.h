@@ -33,6 +33,8 @@ private:
     juce::Label meterLabel;
     juce::Label meterSlash;
     juce::Label barsLabel;
+    juce::Label zoomLabel;
+    juce::Label zoomValueLabel;
     juce::ComboBox kitSelector;
     juce::ComboBox patternSelector;
     juce::ComboBox numeratorSelector;
@@ -42,11 +44,13 @@ private:
     juce::TextButton undoButton { "Undo" };
     juce::TextButton duplicateButton { "Duplicate" };
     juce::TextButton clearButton { "Clear" };
+    juce::TextButton fitZoomButton { "Fit" };
+    juce::Slider zoomSlider;
     juce::Viewport gridViewport;
     std::unique_ptr<GgdDrumGrid> grid;
 
-    static constexpr int topAreaHeight = 104;
-    static constexpr int bottomAreaHeight = 36;
+    static constexpr int topAreaHeight = 112;
+    static constexpr int bottomAreaHeight = 32;
 
     void timerCallback() override;
     void configureLookAndFeel();
@@ -56,6 +60,7 @@ private:
     void refreshControlsFromModel();
     void rebuildBarsSelector();
     void refreshPatternSelectorLabels();
+    void refreshZoomControls(float scale);
     void setActiveMap(int index);
     void performUndo();
     void duplicateCurrentPattern();

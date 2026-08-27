@@ -1,24 +1,34 @@
-# Stochas GGD v0.1.0-alpha.6
+# Stochas GGD v0.1.0-alpha.7
 
-Alpha.6 is an input and selection-workflow cleanup focused on making the editor behave predictably inside Bitwig.
+Alpha.7 fixes the remaining shortcut double-input behavior and adds the first proper MIDI groove-import workflow.
 
-## Selection duplication
+## Deterministic keyboard editing
 
-- Removed the ambiguous toolbar Duplicate button.
-- In Select mode, hold Alt while dragging a selected hit or group to copy it to the drag destination instead of moving the original.
-- Alt-drag copies velocity, probability, timing offset and retrigger data with the selected hits.
-- Copy previews use a distinct tint and refuse to overwrite occupied destination cells.
+- Plain editor shortcuts now have one execution path instead of being independently handled by both JUCE key events and the Bitwig physical-key fallback.
+- Arrow nudging at normal zoom always moves exactly one 1/16 step horizontally or one visible articulation row vertically.
+- In the 1/32 detail view, simple hits can be nudged horizontally by one 1/32 position.
+- Alt+Arrow duplicates the current selection by the same nudge amount instead of moving it.
+- Alt+drag duplication remains available in Select mode.
+- Undo actions are debounced at the action boundary to protect against duplicate host input. U remains the plugin-local undo shortcut, while Ctrl+Z still depends on whether the host forwards it.
 
-## Keyboard input
+## MIDI groove import
 
-- Centralized editor shortcuts through the drum grid and made letter matching case-insensitive.
-- Toolbar controls no longer unnecessarily steal keyboard focus from the grid, and common actions return focus to the editor.
-- Added a guarded physical-key fallback for D/S tool switching, U undo, arrow nudging, Delete/Backspace and Escape while the plugin is the active editing surface. This helps when a host does not forward normal plugin key events reliably.
-- Ctrl+Z remains supported when a host forwards it, but Bitwig may intercept it first. U remains the reliable plugin-local undo shortcut.
+- Added an Import MIDI action for Standard MIDI Files using PPQ timing.
+- Added a source-profile selector with Auto plus the built-in P V, P IV and Modern & Massive mappings.
+- Auto mode chooses the source profile with the highest note-mapping coverage.
+- Imported source MIDI pitches are converted to semantic drum articulations before being written to the currently selected destination GGD kit, so source and target mappings can differ.
+- Supported time-signature metadata is imported and pattern length is derived automatically up to the current 8-bar limit.
+- Velocity and sub-1/16 timing are preserved using the existing Stochas velocity and offset data.
+- Same-cell flam/retrigger collisions are compacted into the existing retrigger representation where possible.
+- Import reports mapping coverage, unresolved MIDI pitches, collisions and truncated notes instead of silently hiding them.
+- Importing over a non-empty current pattern requires confirmation and does not overwrite other pattern slots.
 
-## UI cleanup
+## Current import limitations
 
-- Replaced non-ASCII bullet/key-hint separators in the editor with plain ASCII separators to avoid broken Windows fallback-font glyphs.
-- Updated the help strip to describe Alt-drag duplication instead of the removed duplicate command.
+- Auto detection currently uses the three built-in GGD kit maps as source profiles. Pack-specific historical MIDI profiles are a later expansion.
+- Time-signature changes inside one MIDI file are not supported yet.
+- Unresolved source pitches are reported but are not retained as editable unresolved events.
+- At 1/32 detail zoom, retrigger/roll cells cannot yet be losslessly half-step nudged.
+- Pattern meter and length are still inherited Stochas layer geometry, so changing them affects the shared pattern-slot geometry.
 
-Alpha.5's Draw/Select editing, marquee selection, relative multi-hit velocity editing, exact 1-127 velocity popup, 60 Hz interpolated playhead, 25% zoom increments, 1/32 detail mode, GGD mappings, MIDI passthrough, meters and eight-bar patterns remain intact.
+The existing Draw/Select editor, marquee editing, velocity popup, smooth playhead, semantic GGD destination mappings, MIDI passthrough, ghost notes, rolls, microtiming and 125% default zoom remain intact.

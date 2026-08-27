@@ -23,6 +23,7 @@ Do not add pointers to any of these!
 
 #include "Constants.h"
 #include "Scale.h"
+#include <cstdint>
 
 class SequenceData;
 
@@ -106,7 +107,7 @@ class SequenceLayer {
 
    // for chain information
    struct SourceCell {
-      unsigned char col;      // source info
+      uint16_t col;      // source info
       unsigned char row;
       unsigned char targetrow; // which row it applies to
       int8_t flags;

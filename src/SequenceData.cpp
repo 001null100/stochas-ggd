@@ -135,7 +135,7 @@ void SeqProcessorNotifier::addCompletedMidiNote(int number, int velocity, int le
    jassert(velocity < 128);
    jassert(len < SEQ_MAX_STEPS); // length is 0 based
    jassert(pos < SEQ_MAX_STEPS);
-   third = (len << 8) + pos;
+   third = ((len & 0xFFFF) << 16) | (pos & 0xFFFF);
    mCompletedNoteFifo.addToFifo(number, velocity, third);
 }
 void SeqProcessorNotifier::setRecordingState(PlayRecordState state)
@@ -162,8 +162,8 @@ SeqProcessorNotifier::getCompletedMidiNote(int * number, int * velocity, int * l
    int third;
    bool r= mCompletedNoteFifo.readFromFifo(number, velocity, &third);
    if (r) {
-      *pos = third & 0xFF;
-      *len = third >> 8;
+      *pos = third & 0xFFFF;
+      *len = (third >> 16) & 0xFFFF;
    }
    return  r;
 }
@@ -517,7 +517,7 @@ bool SequenceLayer::addChainSource(int row, int step, int sourceRow, int sourceS
          availableCell = i; // potentially use this (unless we find a cell representing the same data below)
       }
       else if ((cells[i].flags & SEQ_CHAIN_FLAG_USED) &&
-         cells[i].col == (unsigned char)sourceStep &&
+         cells[i].col == static_cast<uint16_t>(sourceStep) &&
          cells[i].row == (unsigned char)sourceRow &&
          cells[i].targetrow == (unsigned char)row)
       {
@@ -531,7 +531,7 @@ bool SequenceLayer::addChainSource(int row, int step, int sourceRow, int sourceS
    cells[availableCell].flags = SEQ_CHAIN_FLAG_USED | 
       (negtgt ? SEQ_CHAIN_FLAG_NEGTGT : 0) |
       (negsrc ? SEQ_CHAIN_FLAG_NEGSRC : 0);
-   cells[availableCell].col = (unsigned char)sourceStep;
+   cells[availableCell].col = static_cast<uint16_t>(sourceStep);
    cells[availableCell].row = (unsigned char)sourceRow;
    cells[availableCell].targetrow = (unsigned char)row;
    return true;
@@ -1023,7 +1023,7 @@ SequenceLayer::getStepsPerMeasure()
 void
 SequenceLayer::setStepsPerMeasure(int val) 
 {
-   jassert(val >= SEQ_MIN_STEPS && val <= SEQ_DEFAULT_NUM_STEPS);
+   jassert(val >= SEQ_MIN_STEPS && val <= SEQ_MAX_STEPS_PER_MEASURE);
    mStepsPerMeasure = val;
 }
 

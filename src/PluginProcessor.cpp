@@ -52,7 +52,7 @@ SeqAudioProcessor::SeqAudioProcessor()  :
       // 0-based!
       addAutParam(new SeqAudioProcessorParameter(this, SEQ_AUT_CLOCKDIV, 0, SEQ_NUM_CLOCK_DIVS-1, i,"speed"));
       addAutParam(new SeqAudioProcessorParameter(this, SEQ_AUT_NUMSTEPS, SEQ_MIN_STEPS, SEQ_MAX_STEPS, i,"steps"));
-      addAutParam(new SeqAudioProcessorParameter(this, SEQ_AUT_STEPS_PER_MEASURE, SEQ_MIN_STEPS, SEQ_DEFAULT_NUM_STEPS, i,"steps/measure"));
+      addAutParam(new SeqAudioProcessorParameter(this, SEQ_AUT_STEPS_PER_MEASURE, SEQ_MIN_STEPS, SEQ_MAX_STEPS_PER_MEASURE, i,"steps/measure"));
       addAutParam(new SeqAudioProcessorParameter(this, SEQ_AUT_NOTE_LENGTH, SEQ_DUTY_MIN, SEQ_DUTY_MAX, i,"note length"));
       addAutParam(new SeqAudioProcessorParameter(this, SEQ_AUT_POS_VARIANCE, 0, SEQ_MAX_HUMAN_POSITION, i,"pos variance"));
       addAutParam(new SeqAudioProcessorParameter(this, SEQ_AUT_VELO_VARIANCE, 0, SEQ_MAX_HUMAN_VELOCITY, i,"velo variance"));

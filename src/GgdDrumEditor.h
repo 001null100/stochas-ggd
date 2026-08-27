@@ -6,6 +6,7 @@
 #include "GgdPatternFile.h"
 #include "GgdLibraryBrowser.h"
 
+#include <array>
 #include <cstdint>
 #include <deque>
 #include <optional>
@@ -75,8 +76,8 @@ private:
     std::deque<GgdPatternSnapshot> undoHistory;
     std::deque<GgdPatternSnapshot> redoHistory;
     std::optional<GgdPatternSnapshot> lastCommittedSnapshot;
-    std::uint64_t cleanPatternFingerprint = 0;
-    bool cleanPatternFingerprintValid = false;
+    std::array<std::uint64_t, SEQ_MAX_PATTERNS> cleanPatternFingerprints {};
+    std::array<bool, SEQ_MAX_PATTERNS> cleanPatternFingerprintValid {};
     bool restoringHistory = false;
     double lastUndoMs = -1000.0;
     double lastRedoMs = -1000.0;
@@ -97,10 +98,12 @@ private:
     void refreshZoomControls(float scale);
     void setActiveMap(int index);
 
+    GgdPatternSnapshot capturePattern(int pattern) const;
     GgdPatternSnapshot captureCurrentPattern() const;
     void restorePatternSnapshot(const GgdPatternSnapshot& snapshot, bool publish = true);
     void recordCommittedPatternEdit();
     void resetHistoryForCurrentPattern(bool markClean);
+    void initialiseCleanPatternFingerprints();
     void markCurrentPatternClean();
     bool currentPatternHasChanges() const;
     void performUndo();

@@ -33,7 +33,7 @@ bool varToHit(const juce::var& value, GgdPatternHit& hit)
     hit.velocity = juce::jlimit(1, 127, static_cast<int>(object->getProperty("velocity")));
     hit.probability = juce::jlimit(0, 100, static_cast<int>(object->getProperty("probability")));
     hit.retriggerLength = juce::jlimit(-SEQ_MAX_RETRIGGER + 1,
-                                       SEQ_NOTE_LENGTH_MAX,
+                                       127,
                                        static_cast<int>(object->getProperty("length")));
     hit.offset = juce::jlimit(-50, 50, static_cast<int>(object->getProperty("offset")));
     return hit.semanticId.isNotEmpty() && hit.step >= 0;

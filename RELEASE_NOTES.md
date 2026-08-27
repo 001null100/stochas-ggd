@@ -1,31 +1,47 @@
-# Stochas GGD v0.1.0-alpha.8
+# Stochas GGD v0.1.0-alpha.9
 
-Alpha.8 removes the old short-pattern ceiling and replaces the heuristic GGD MIDI importer with the experimentally reconstructed Groove Player translation path.
+Alpha.9 is a workflow and library-browser pass. Grooves and reusable native patterns now live beside the editor, while selection editing, history and kit navigation are substantially more practical.
 
-## Larger pattern engine
+## Groove and pattern browser
 
-- Expanded the inherited sequence capacity from 256 to 1024 sixteenth-note storage steps.
-- Widened chain-source step indices and completed-note notification packing so positions beyond step 255 are represented correctly.
-- Pattern length is now entered directly as a bar count instead of selected from a fixed dropdown.
-- The maximum bar count is derived from the current meter and engine capacity. At 4/4, the editor can hold up to 64 bars.
-- Time-signature numerators can now be set from 1 through 32. Denominators remain 4, 8 and 16 so every bar maps exactly to the current 1/16 storage grid.
+- Added a persistent right-side browser with separate `Grooves` and `Patterns` tabs.
+- Each tab has its own configurable root folder, remembered between sessions.
+- Folder hierarchies are shown recursively and sorted naturally, so existing GGD pack organization can be used directly.
+- Double-click a MIDI groove to load it through the exact GGD Groove Player importer introduced in alpha.8.
+- Double-click a native Stochas GGD pattern to replace the current pattern.
+- Replacement is immediate when the current pattern is unchanged since its last load/save baseline. A confirmation dialog appears only when there are actual edits to protect.
+- The Patterns tab can save the current pattern directly into the selected library and refreshes after saving.
 
-## Exact GGD Groove Player import
+## Native semantic pattern files
 
-- Removed the Auto/P V/P IV/Modern & Massive source-profile selector and its pitch-coverage guessing.
-- Official GGD Groove Player MIDI is now translated through the pitch mappings reconstructed from the remapping experiment, then resolved into the selected destination kit's semantic articulation rows.
-- Dedicated translation tables are provided for P V, P IV and Modern & Massive.
-- Rare Groove Player articulations that are not exposed exactly by P V or P IV use conservative documented fallbacks rather than silently disappearing.
-- Experimental source pitch 85 remains deliberately unresolved because its observed remap output was ambiguous. The importer reports it instead of inventing a drum articulation.
-- Import continues to preserve velocity and sub-1/16 timing using Stochas velocity and offset data, and reports unresolved notes, fallbacks, retrigger collisions and truncation.
-- Imported meter and bar count can use the expanded engine capacity, so long GGD grooves are no longer restricted to eight bars.
+- Added the `.sggdp` native pattern format.
+- Native patterns store semantic articulation IDs rather than one kit's raw MIDI pitches, making them portable across the built-in P V, P IV and Modern & Massive destination maps.
+- Pattern files retain pattern name, meter, bar count, velocity, probability, retrigger/length and microtiming offset data.
 
-## Current limitations
+## Editing workflow
 
-- Time-signature changes inside a single MIDI file are not supported yet.
-- Denominators other than 4, 8 and 16 are not represented by the current 1/16 storage model.
-- Pattern meter and length are inherited Stochas layer geometry, so changing them still affects the shared geometry of all pattern slots on the layer.
-- The high-zoom 1/32 editing view still uses the existing offset/retrigger representation rather than a native 1/32 storage grid.
-- Ctrl+Z remains dependent on whether the host forwards it; U is the reliable plugin-local undo shortcut.
+- Added editor-level multi-step undo/redo history with a 24-state working depth.
+- `U` remains the reliable plugin-local Undo shortcut and `Y` is the local Redo shortcut. The visible Undo/Redo buttons do not depend on Bitwig forwarding host shortcuts.
+- Added selection copy/paste while preserving velocity, probability, retrigger and timing data.
+- Paste searches to the right for a collision-free destination instead of destructively overwriting existing hits.
+- The contextual bottom strip now exposes selection count, Copy, Paste, relative velocity adjustment, timing adjustment, Humanize and Delete when useful instead of showing one giant static shortcut sentence.
+- Humanize applies a small per-hit velocity and timing variation to the current selection.
+- Existing Alt-drag and Alt+Arrow duplication remain available for fast duplication while moving.
 
-The existing Draw/Select workflow, marquee editing, velocity popup, smooth playhead, semantic destination maps, MIDI passthrough, ghost notes, rolls and microtiming remain intact.
+## Pattern-slot safety
+
+- Added a Pattern actions menu for duplication, saving to the native pattern library and clearing the current slot.
+- Duplicate now searches for an empty internal pattern slot and never silently overwrites an occupied one.
+- Pattern naming remains directly editable in the top bar.
+
+## Drum-lane organization
+
+- Articulations are now presented in a stable drum-family order: Kick, Snare, Toms, Hi-Hat, Ride, Crashes, China, Splashes and Other.
+- Family headers can be collapsed or expanded by clicking them, which makes larger kits much easier to navigate.
+- Collapse indicators use plain ASCII glyphs to avoid the Windows font-fallback issue seen in earlier builds.
+
+## Existing alpha.8 foundation
+
+- The 1024-step engine, direct numeric bar entry, larger time signatures and exact GGD Groove Player translation path remain intact.
+- The high-zoom 1/32 editor still uses the existing offset/retrigger representation rather than native 1/32 storage.
+- Meter and pattern length remain inherited layer geometry, so those values are still shared by the eight internal pattern slots.

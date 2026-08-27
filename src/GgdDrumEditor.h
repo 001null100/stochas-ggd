@@ -41,10 +41,12 @@ private:
     juce::ComboBox denominatorSelector;
     juce::ComboBox barsSelector;
     juce::TextEditor patternName;
+    juce::TextButton drawModeButton { "Draw" };
+    juce::TextButton selectModeButton { "Select" };
     juce::TextButton undoButton { "Undo" };
     juce::TextButton duplicateButton { "Duplicate" };
     juce::TextButton clearButton { "Clear" };
-    juce::TextButton fitZoomButton { "Fit" };
+    juce::TextButton fitZoomButton { "125%" };
     juce::Slider zoomSlider;
     juce::Viewport gridViewport;
     std::unique_ptr<GgdDrumGrid> grid;

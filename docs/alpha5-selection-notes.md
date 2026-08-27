@@ -1,1 +1,0 @@
-Temporary alpha.5 implementation note. Selection is intentionally cell-level at 1/32 detail zoom because adjacent 1/32 pairs share one underlying Stochas cell and its properties. Remove before release.

@@ -2,6 +2,7 @@
 
 #include "PluginProcessor.h"
 #include "GgdKitMap.h"
+#include "GgdMidiImporter.h"
 
 class GgdDrumGrid;
 
@@ -40,15 +41,19 @@ private:
     juce::ComboBox numeratorSelector;
     juce::ComboBox denominatorSelector;
     juce::ComboBox barsSelector;
+    juce::ComboBox sourceMapSelector;
     juce::TextEditor patternName;
     juce::TextButton drawModeButton { "Draw" };
     juce::TextButton selectModeButton { "Select" };
     juce::TextButton undoButton { "Undo" };
     juce::TextButton clearButton { "Clear" };
+    juce::TextButton importMidiButton { "Import MIDI" };
     juce::TextButton fitZoomButton { "125%" };
     juce::Slider zoomSlider;
     juce::Viewport gridViewport;
     std::unique_ptr<GgdDrumGrid> grid;
+    std::unique_ptr<juce::FileChooser> midiFileChooser;
+    double lastUndoMs = -1000.0;
 
     static constexpr int topAreaHeight = 112;
     static constexpr int bottomAreaHeight = 32;
@@ -64,6 +69,9 @@ private:
     void refreshZoomControls(float scale);
     void setActiveMap(int index);
     void performUndo();
+    void chooseMidiFile();
+    void importMidiFile(const juce::File& file);
+    void applyMidiImport(const GgdMidiImportResult& result);
     void publishModelChange();
     void clearCurrentPattern();
     void updatePersistenceTag();

@@ -4,6 +4,7 @@
 #include <array>
 #include <cmath>
 #include <map>
+#include <limits>
 #include <set>
 
 namespace

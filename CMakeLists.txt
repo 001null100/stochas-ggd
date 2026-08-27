@@ -102,7 +102,8 @@ juce_generate_juce_header(stochas)
 # core, and put the new drum editor directly on top of it.
 target_sources(stochas PRIVATE
     src/EditorState.cpp
-    src/GgdDrumEditorAlpha6.cpp
+    src/GgdDrumEditorAlpha7.cpp
+    src/GgdMidiImporter.cpp
     src/GgdKitMap.cpp
     src/pcg_basic.c
     src/Persist.cpp

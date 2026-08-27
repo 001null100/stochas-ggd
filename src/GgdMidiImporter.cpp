@@ -164,7 +164,7 @@ GgdMidiImportResult GgdMidiImporter::parseFile(
                 RawNote note;
                 note.quarter = message.getTimeStamp() / static_cast<double>(ppq);
                 note.note = message.getNoteNumber();
-                note.velocity = juce::jlimit(1, 127, message.getVelocity());
+                note.velocity = juce::jlimit(1, 127, static_cast<int>(message.getVelocity()));
                 rawNotes.push_back(note);
             }
             else if (message.isTimeSignatureMetaEvent())

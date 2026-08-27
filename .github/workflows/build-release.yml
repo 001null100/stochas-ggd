@@ -2,6 +2,8 @@ name: Build & Release Windows CLAP
 
 on:
   push:
+    branches:
+      - main
     tags:
       - 'v*'
   workflow_dispatch:
@@ -29,6 +31,27 @@ jobs:
           submodules: recursive
           fetch-depth: 1
 
+      - name: Resolve release version
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ($env:GITHUB_REF -like 'refs/tags/*') {
+            $tag = $env:GITHUB_REF_NAME
+            $publish = 'true'
+          }
+          else {
+            $tag = (Get-Content RELEASE_VERSION -Raw).Trim()
+            if ([string]::IsNullOrWhiteSpace($tag) -or -not $tag.StartsWith('v')) {
+              throw 'RELEASE_VERSION must contain a version tag beginning with v'
+            }
+            gh release view $tag *> $null
+            $publish = if ($LASTEXITCODE -eq 0) { 'false' } else { 'true' }
+          }
+
+          "RELEASE_TAG=$tag" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "SHOULD_PUBLISH=$publish" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
       - name: Set up MSVC command line
         uses: ilammy/msvc-dev-cmd@v1.13.0
         with:
@@ -54,8 +77,7 @@ jobs:
       - name: Stage release package
         shell: pwsh
         run: |
-          $releaseName = if ($env:GITHUB_REF -like 'refs/tags/*') { $env:GITHUB_REF_NAME } else { "manual-$env:GITHUB_RUN_NUMBER" }
-          $archiveName = "Stochas-GGD-$releaseName-Windows-x64.zip"
+          $archiveName = "Stochas-GGD-$env:RELEASE_TAG-Windows-x64.zip"
 
           New-Item -ItemType Directory -Force artifact/package | Out-Null
           Copy-Item "build/stochas_artefacts/Release/CLAP/Stochas GGD.clap" "artifact/package/Stochas GGD.clap"
@@ -63,7 +85,7 @@ jobs:
           Copy-Item "COPYING" "artifact/package/LICENSE.txt"
 
           @"
-          Stochas GGD $releaseName
+          Stochas GGD $env:RELEASE_TAG
           Windows x64 CLAP
 
           INSTALL
@@ -82,7 +104,7 @@ jobs:
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: stochas-ggd-${{ github.ref_name }}-windows-x64
+          name: stochas-ggd-${{ env.RELEASE_TAG }}-windows-x64
           path: |
             artifact/Stochas.GGD.clap
             artifact/${{ env.ARCHIVE_NAME }}
@@ -90,26 +112,31 @@ jobs:
           retention-days: 14
 
       - name: Publish versioned release
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: env.SHOULD_PUBLISH == 'true'
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $tag = $env:GITHUB_REF_NAME
+          $tag = $env:RELEASE_TAG
           $args = @(
             'release', 'create', $tag,
-            '--verify-tag',
             '--title', "Stochas GGD $tag",
             '--generate-notes'
           )
+
+          if ($env:GITHUB_REF -notlike 'refs/tags/*') {
+            $args += @('--target', $env:GITHUB_SHA)
+          }
+          else {
+            $args += '--verify-tag'
+          }
+
           if ($tag -match '-') {
             $args += '--prerelease'
           }
 
-          if (-not (gh release view $tag 2>$null)) {
-            & gh @args
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          }
+          & gh @args
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
           gh release upload $tag `
             "artifact/Stochas.GGD.clap" `

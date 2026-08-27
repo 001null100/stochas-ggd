@@ -1,0 +1,39 @@
+name: Generate alpha7 editor
+
+on:
+  push:
+    branches:
+      - feature/alpha7-midi-import
+    paths:
+      - tools/generate_alpha7.py
+      - src/GgdMidiImporter.cpp
+      - src/GgdMidiImporter.h
+      - .github/workflows/generate-alpha7.yml
+
+permissions:
+  contents: write
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v4
+        with:
+          ref: feature/alpha7-midi-import
+
+      - name: Generate editor
+        run: python3 tools/generate_alpha7.py
+
+      - name: Commit generated source
+        shell: bash
+        run: |
+          if git diff --quiet; then
+            echo "Generated source is already current."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/GgdDrumEditorAlpha7.cpp src/GgdDrumEditor.h src/GgdMidiImporter.cpp src/GgdMidiImporter.h CMakeLists.txt
+          git commit -m "Generate alpha 7 editor"
+          git push origin HEAD:feature/alpha7-midi-import

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <JuceHeader.h>
+#include <vector>
 #include "GgdKitMap.h"
 
 struct GgdImportedCell

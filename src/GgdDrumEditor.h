@@ -44,7 +44,6 @@ private:
     juce::TextButton drawModeButton { "Draw" };
     juce::TextButton selectModeButton { "Select" };
     juce::TextButton undoButton { "Undo" };
-    juce::TextButton duplicateButton { "Duplicate" };
     juce::TextButton clearButton { "Clear" };
     juce::TextButton fitZoomButton { "125%" };
     juce::Slider zoomSlider;
@@ -65,7 +64,6 @@ private:
     void refreshZoomControls(float scale);
     void setActiveMap(int index);
     void performUndo();
-    void duplicateCurrentPattern();
     void publishModelChange();
     void clearCurrentPattern();
     void updatePersistenceTag();

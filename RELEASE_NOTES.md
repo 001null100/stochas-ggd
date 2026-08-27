@@ -1,29 +1,24 @@
-# Stochas GGD v0.1.0-alpha.5
+# Stochas GGD v0.1.0-alpha.6
 
-Alpha.5 turns the grid into a more complete drum editor rather than only a drawing surface.
+Alpha.6 is an input and selection-workflow cleanup focused on making the editor behave predictably inside Bitwig.
 
-## Draw and Select/Edit modes
+## Selection duplication
 
-- Added explicit Draw and Select tools, switchable with D and S while the editor has keyboard focus.
-- Select mode supports click selection, Shift-add/toggle, marquee selection, dragging selections in time or between visible articulation rows, arrow-key nudging, Delete/Backspace, Ctrl+A and Ctrl+D when the host forwards those keys.
-- Selected hits receive a clear outline and drag moves show a destination preview.
-- Moves preserve velocity, probability, timing offsets and retrigger data and refuse to overwrite unrelated occupied cells.
-- Alt+wheel over a selected hit adjusts the whole selection's velocity relatively, preserving the dynamics between hits.
+- Removed the ambiguous toolbar Duplicate button.
+- In Select mode, hold Alt while dragging a selected hit or group to copy it to the drag destination instead of moving the original.
+- Alt-drag copies velocity, probability, timing offset and retrigger data with the selected hits.
+- Copy previews use a distinct tint and refuse to overwrite occupied destination cells.
 
-## Editing feedback
+## Keyboard input
 
-- Velocity editing now shows the exact 1-127 value in a compact popup above the hit during Shift-drag and after Alt+wheel adjustments.
-- Ctrl+Z is still accepted if a host forwards it, but Bitwig intercepts it before the plugin. Plain U is now the plugin-local undo shortcut alongside the Undo button.
+- Centralized editor shortcuts through the drum grid and made letter matching case-insensitive.
+- Toolbar controls no longer unnecessarily steal keyboard focus from the grid, and common actions return focus to the editor.
+- Added a guarded physical-key fallback for D/S tool switching, U undo, arrow nudging, Delete/Backspace and Escape while the plugin is the active editing surface. This helps when a host does not forward normal plugin key events reliably.
+- Ctrl+Z remains supported when a host forwards it, but Bitwig may intercept it first. U remains the reliable plugin-local undo shortcut.
 
-## Transport
+## UI cleanup
 
-- Replaced the subdivision-jumping playback highlight with a thin interpolated playhead rendered at 60 Hz.
-- The editor measures the engine's step-transition interval and interpolates between reported positions, keeping the audio engine untouched while producing visibly smoother motion.
+- Replaced non-ASCII bullet/key-hint separators in the editor with plain ASCII separators to avoid broken Windows fallback-font glyphs.
+- Updated the help strip to describe Alt-drag duplication instead of the removed duplicate command.
 
-## Zoom
-
-- Zoom now snaps to 25% increments from 50% to 400%.
-- Ctrl+wheel moves one 25% interval per gesture.
-- 125% remains the default and the existing 350%+ 1/32 detail mode is unchanged.
-
-The existing GGD semantic mappings, MIDI passthrough, arbitrary meter support, eight-bar patterns, ghost notes, rolls, microtiming and hat-articulation workflow remain intact.
+Alpha.5's Draw/Select editing, marquee selection, relative multi-hit velocity editing, exact 1-127 velocity popup, 60 Hz interpolated playhead, 25% zoom increments, 1/32 detail mode, GGD mappings, MIDI passthrough, meters and eight-bar patterns remain intact.

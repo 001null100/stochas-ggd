@@ -1,114 +1,123 @@
-# Stochas GGD v0.2.0-beta.3
+# Stochas GGD v0.2.0-beta.4
 
-Beta 3 is the first feature-focused release on top of the stabilized Beta event engine and restored Beta 2 editor. The scheduler, event store, persistence and import foundation are deliberately left alone; this release concentrates on making drum programming faster and the surrounding workflow less cumbersome.
+Beta 4 is a readability-first visual release built directly on Beta 3. The event scheduler, 960 PPQ pattern model, persistence, MIDI import/export and drum-transform logic are deliberately unchanged. This release concentrates on making the editor easier to parse at a glance and more satisfying to use for long sessions.
 
-## Per-hit probability editing
+## Shared theme system
 
-- Selected hits now expose real event probability through fast `25%`, `50%`, `75%` and `100%` presets.
-- The selection status reports the shared probability when selected hits match, or `Pmix` when the selection contains different values.
-- Probability remains an event property, so it survives native pattern/project persistence and moves with copied or transformed hits.
-- Probability editing participates in the existing pattern undo history through the normal event publication path.
+Beta 4 introduces four persistent appearance themes:
 
-## Faster velocity workflow
+- **Graphite** — neutral dark teal and the new default baseline.
+- **Midnight** — cool navy with cyan/blue accents.
+- **Ember** — warm charcoal with amber accents.
+- **Contrast** — near-black surfaces with deliberately strong structural separation.
 
-Two common drum-performance values now have dedicated actions:
+Theme selection is stored as a local appearance preference rather than inside project or pattern data. The editor, timeline and Grooves / Patterns browser use the same shared palette instead of maintaining unrelated colour schemes.
 
-- **Ghost** sets selected hits to velocity 35.
-- **Accent** sets selected hits to velocity 120.
+## Timing hierarchy is now explicit
 
-The existing relative velocity controls, direct velocity dragging and imported velocities remain unchanged.
+Bar, beat and subdivision lines no longer depend on small brightness variations of one generic border colour. They have dedicated semantic roles that preserve the same hierarchy in every theme:
 
-## Real Flam and Double transforms
+1. **Bar boundaries** are the strongest full-height dividers and use a two-pixel line.
+2. **Beat boundaries** remain full-height but are clearly secondary to bars.
+3. **Primary subdivisions** are quieter editing guides for the active straight or triplet grid.
+4. **Fine subdivisions** are the quietest layer and only appear when the high-resolution grid is active.
 
-The new event timeline is finally being used for drum-aware transforms rather than only storage.
+Alternating bar shading remains intentionally subtle so it supports the structure without competing with hits.
 
-- **Flam** creates a quieter grace hit 1/64 before each selected hit.
-- **Double** creates a slightly softer independent 1/32 follow-up hit.
-- Generated hits are ordinary events with their own velocity, probability, duration and editable position.
-- Collisions and transforms outside the pattern boundary are skipped safely.
-- These are not inherited Stochas retrigger flags, so the generated notes can be selected, moved, copied, quantized or deleted independently afterward.
+## Clearer instrument groups
 
-## High-resolution MIDI export
+Instrument-family separators now read as actual sections rather than slightly different rows.
 
-Beta 3 adds `Export MIDI` beside the existing import action.
+- Family headers use their own fill and separator colours.
+- A strong top edge and dedicated side rail distinguish headers from articulations.
+- Collapse state uses a clean triangle indicator instead of ASCII `[-]` / `[+]` markers.
+- Ordinary articulation rows retain alternating shading and lighter horizontal separators.
+- The sticky articulation column has a stronger boundary from the timeline so horizontal scrolling never visually merges labels with the grid.
 
-- Exports the current pattern using the **active GGD destination kit map**.
-- Resolves semantic articulations to destination MIDI notes only at export time.
-- Preserves the pattern PPQ resolution, exact event timing, velocity, duration and time signature.
-- Unmapped semantic articulations are counted and skipped instead of being assigned guessed MIDI notes.
-- The default filename follows the current pattern name and prefers the configured pattern-library folder when available.
+## Hits, selection and playback
 
-Standard MIDI note events have no native probability field. MIDI export therefore writes every mapped hit; probability remains part of Stochas GGD native/project state.
+Pattern content, editing state and transport now have separate visual identities.
 
-## Searchable Grooves / Patterns browser
+- Regular hits gain a restrained accent halo and velocity-dependent body.
+- Ghost notes use a lighter filled/outlined treatment instead of looking like ordinary hits at lower opacity.
+- Selected hits use a dedicated high-contrast selection glow and outline rather than relying on the hit accent.
+- Draw-mode hover targets have a subtle fill plus outline so the pending insertion point is easier to judge.
+- Marquee selection remains translucent but has a stronger readable edge.
+- The playhead now has its own theme role, soft vertical glow, strong centre line and a small ruler marker. It no longer competes with note-hit colour.
 
-The right-side browser now has a live filter in both tabs.
+The existing smooth playhead interpolation is unchanged.
 
-- Searches both filenames and relative folder paths.
-- Matching results temporarily flatten into one quick result list for large groove packs.
-- Clearing the filter returns to the normal collapsible folder hierarchy.
-- Loaded-file highlighting remains visible in filtered results.
-- Search results retain the existing double-click load behavior.
-- Each library now maintains a cached file index. The disk is scanned when the root changes or Refresh is pressed, while typing filters the in-memory index instead of recursively walking the folder on every keystroke.
-- Filter output is capped at 500 visible matches to keep the tree responsive on extremely large libraries.
+## More tactile controls
 
-## Editor workflow polish
+Beta 4 adds a shared JUCE look-and-feel for the editor chrome.
 
-The selection/action area has been expanded into a two-row performance strip so the new tools do not compress the timeline or browser.
+- Buttons have consistent rounded surfaces, borders and distinct hover / pressed / active states.
+- Toggle buttons make their active state substantially clearer.
+- Combo boxes use the same surface/border language and a cleaner dropdown indicator.
+- The zoom slider has separate background, active track, thumb and hover feedback.
+- Popup menus, text editors and scrollbars follow the selected theme.
+- The two-row performance strip is grouped into two quiet visual shelves instead of floating controls on a flat background.
 
-First row:
-- select all / copy / paste
-- relative velocity
-- Ghost / Accent
-- probability presets
-- Delete
+The goal is feedback that feels responsive without adding animation or decoration that interferes with rhythmic reading.
 
-Second row:
-- Earlier / Quantize / Later
-- Humanize
-- Flam / Double
-- contextual shortcut hint
+## Browser visual pass
 
-The top toolbar now keeps pattern-level operations together, including Import MIDI and Export MIDI.
+The Grooves / Patterns browser now follows the active theme and updates immediately when the theme changes.
 
-The editor minimum size remains large enough to preserve the dedicated browser column and usable timeline area.
+- Loaded items use a rounded highlight and accent rail.
+- Selected items use a separate quieter outline/fill state.
+- Search fields, tree lines, empty-state text and browser chrome use shared palette roles.
+- Browser header separation and padding are slightly cleaner.
+- Existing indexed live search, folder roots, double-click loading and loaded-file tracking are unchanged.
 
-## Browser and project documentation cleanup
+## Readable minimum layout
 
-- Replaced the stale upstream Stochas README that still linked to the Surge Stochas releases and described generic AU/AAX/Projucer workflows.
-- The repository README now documents the actual Windows CLAP note-effect workflow, supported GGD maps, event engine, library behavior, MIDI import/export and current beta boundaries.
-- `docs/architecture.md` now reflects the implemented 960 PPQ event model, independent per-pattern geometry, semantic import/export pipeline, browser index, performance transforms and release process.
+The minimum editor width is now **1400 px**. Beta 4 intentionally prefers preserving the pattern-name field, theme selector, dedicated browser column and timeline readability rather than allowing the host to compress the interface into a technically valid but poor layout.
+
+## Beta 3 workflow retained
+
+Everything added in Beta 3 remains available:
+
+- per-hit probability presets
+- Ghost / Accent velocity actions
+- event-based Flam / Double transforms
+- high-resolution MIDI export
+- indexed Grooves / Patterns filtering
+- the two-row selection/performance strip
+- high-resolution MIDI import
+- native `.sggdp` patterns
+- per-pattern meter and bar count
+- zoom-driven straight/triplet editing resolution
 
 ## Engine intentionally unchanged
 
-Beta 3 does **not** change the parts that proved stable in Beta 1/Beta 2:
+Beta 4 does **not** modify:
 
+- host-PPQ event scheduling
 - 960 PPQ event storage
-- host-PPQ playback scheduling
-- true independent 1/32 and triplet events
-- smooth interpolated playhead
-- zoom-driven straight/triplet editing resolution
-- per-pattern meter and bar count
+- event duration / probability playback
+- transport discontinuity handling
+- project persistence
+- Alpha-to-Beta migration
+- MIDI import translation
+- MIDI export mapping
+- semantic GGD kit mappings
+- pattern geometry
 - live MIDI passthrough
-- semantic GGD destination maps
-- high-resolution MIDI import
-- `.sggdp` v2 pattern files
-- Beta project persistence / Alpha migration
 
-The goal is to build upward from the stable foundation rather than reopen it every release.
+This is intentionally a visual layer on top of the stable Beta 3 behavior.
 
 ## Current boundaries
 
-- Probability has fast presets but no dedicated lane or arbitrary numeric editor yet.
-- Flam uses a musical 1/64 grace offset rather than a millisecond-based flam-time control.
-- Double creates a fixed 1/32 follow-up; more elaborate roll tools are left for later.
-- MIDI export is file-based. Dragging MIDI directly from the plugin into Bitwig is not implemented yet.
+- Themes are supplied palettes rather than a full user colour editor.
+- Theme preference is global/local appearance state, not per-project state.
+- MIDI export remains file-based; direct drag-out into Bitwig is still a later feature.
+- Probability has quick presets but no dedicated lane or arbitrary-value editor yet.
 - Experimental GGD Groove Player source pitch 85 remains intentionally unresolved.
-- Browser search is filename/path filtering rather than a tags/favorites database.
 
 ## Release-candidate checks
 
-The Beta 3 branch is expected to preserve Beta 2 playback behavior while adding the new editor workflows. The Windows PR build must compile and package successfully before merge, and the final release is complete only when GitHub Releases contains both:
+The exact Beta 4 release candidate must compile and package successfully in the Windows PR workflow before merge. The release is complete only when GitHub Releases contains both:
 
 - `Stochas.GGD.clap`
-- `Stochas-GGD-v0.2.0-beta.3-Windows-x64.zip`
+- `Stochas-GGD-v0.2.0-beta.4-Windows-x64.zip`

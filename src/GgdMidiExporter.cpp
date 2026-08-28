@@ -34,8 +34,9 @@ GgdMidiExportResult GgdMidiExporter::writeFile(const juce::File& requestedFile,
     const int channel = juce::jlimit(1, 16, midiChannel);
     juce::MidiMessageSequence sequence;
 
-    auto trackName = juce::MidiMessage::trackNameEvent(
-        pattern.name.isNotEmpty() ? pattern.name : juce::String("Stochas GGD Pattern"));
+    // MIDI meta-event type 3 is the standard Track Name event.
+    auto trackName = juce::MidiMessage::textMetaEvent(
+        3, pattern.name.isNotEmpty() ? pattern.name : juce::String("Stochas GGD Pattern"));
     trackName.setTimeStamp(0.0);
     sequence.addEvent(trackName);
 

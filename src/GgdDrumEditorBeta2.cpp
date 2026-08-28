@@ -6,9 +6,11 @@
 // methods Beta 2 restores to the Alpha 10 behavior.
 #define paint paintLegacy
 #define resized resizedLegacy
+#define keyPressed keyPressedLegacy
 #define timerCallback timerCallbackLegacy
 #include "GgdDrumEditorBeta1.cpp"
 #undef timerCallback
+#undef keyPressed
 #undef resized
 #undef paint
 
@@ -65,11 +67,12 @@ void GgdDrumEditor::initialiseBeta2Ui()
 
     // The browser needs a real reserved column. Do not allow the host to restore
     // the plug-in to Beta 1's too-small minimum where controls and browser fight.
-    setResizeLimits(1320, 600, 2200, 1500);
-    if (getWidth() < 1320 || getHeight() < 600)
+    setResizeLimits(1320, 640, 2200, 1500);
+    if (getWidth() < 1320 || getHeight() < 640)
         setSize(juce::jmax(1420, getWidth()), juce::jmax(820, getHeight()));
 
     updateGridResolutionForZoom(grid ? grid->getZoomScale() : defaultZoomScale);
+    initialiseBeta3Ui();
     resized();
 }
 
@@ -117,6 +120,9 @@ void GgdDrumEditor::paint(juce::Graphics& g)
     g.setColour(c(border).withAlpha(0.90f));
     g.drawHorizontalLine(getHeight() - bottomAreaHeight, 0.0f,
                          static_cast<float>(getWidth()));
+    g.setColour(c(border).withAlpha(0.42f));
+    g.drawHorizontalLine(getHeight() - bottomAreaHeight + 35, 8.0f,
+                         static_cast<float>(juce::jmax(8, getWidth() - browserWidth - 8)));
 
     g.setColour(c(border).withAlpha(0.44f));
     g.drawHorizontalLine(55, 12.0f, static_cast<float>(getWidth() - 12));
@@ -146,6 +152,8 @@ void GgdDrumEditor::resized()
     patternActionsButton.setBounds(first.removeFromLeft(76).reduced(0, 5));
     first.removeFromLeft(gap);
     importMidiButton.setBounds(first.removeFromLeft(86).reduced(0, 5));
+    first.removeFromLeft(5);
+    exportMidiButton.setBounds(first.removeFromLeft(88).reduced(0, 5));
     first.removeFromLeft(gap);
     patternName.setBounds(first.reduced(0, 5));
 
@@ -190,6 +198,8 @@ void GgdDrumEditor::resized()
     gridSelector.setBounds({});
     gridLabel.setVisible(false);
     gridSelector.setVisible(false);
+    probabilityLabel.setBounds({});
+    probabilitySelector.setBounds({});
 
     const int contentHeight = getHeight() - topAreaHeight;
     gridViewport.setBounds(0, topAreaHeight, editorWidth,
@@ -204,35 +214,60 @@ void GgdDrumEditor::resized()
         libraryBrowser->toFront(false);
     }
 
-    auto strip = juce::Rectangle<int>(8, getHeight() - bottomAreaHeight + 2,
-                                      editorWidth - 16, bottomAreaHeight - 4);
-    selectionStatusLabel.setBounds(strip.removeFromLeft(110));
-    strip.removeFromLeft(5);
+    auto strip = juce::Rectangle<int>(8, getHeight() - bottomAreaHeight + 3,
+                                      editorWidth - 16, bottomAreaHeight - 6);
+    auto rowOne = strip.removeFromTop(30);
+    strip.removeFromTop(4);
+    auto rowTwo = strip.removeFromTop(30);
 
-    auto place = [&](juce::TextButton& button, int width)
+    selectionStatusLabel.setBounds(rowOne.removeFromLeft(132));
+    rowOne.removeFromLeft(4);
+    auto placeOne = [&](juce::TextButton& button, int width)
     {
-        button.setBounds(strip.removeFromLeft(width).reduced(0, 4));
-        strip.removeFromLeft(4);
+        button.setBounds(rowOne.removeFromLeft(width).reduced(0, 3));
+        rowOne.removeFromLeft(4);
     };
-    place(selectAllButton, 42);
-    place(copyButton, 48);
-    place(pasteButton, 50);
-    place(velocityDownButton, 50);
-    place(velocityUpButton, 50);
-    place(timingEarlierButton, 58);
-    place(timingResetButton, 66);
-    place(timingLaterButton, 52);
-    place(humanizeButton, 68);
-    place(deleteSelectionButton, 54);
-    hintLabel.setBounds(strip);
+    placeOne(selectAllButton, 42);
+    placeOne(copyButton, 48);
+    placeOne(pasteButton, 50);
+    placeOne(velocityDownButton, 50);
+    placeOne(velocityUpButton, 50);
+    placeOne(ghostButton, 52);
+    placeOne(accentButton, 54);
+    placeOne(probability25Button, 38);
+    placeOne(probability50Button, 38);
+    placeOne(probability75Button, 38);
+    placeOne(probability100Button, 42);
+    placeOne(deleteSelectionButton, 54);
+
+    auto placeTwo = [&](juce::TextButton& button, int width)
+    {
+        button.setBounds(rowTwo.removeFromLeft(width).reduced(0, 3));
+        rowTwo.removeFromLeft(4);
+    };
+    placeTwo(timingEarlierButton, 58);
+    placeTwo(timingResetButton, 66);
+    placeTwo(timingLaterButton, 52);
+    placeTwo(humanizeButton, 68);
+    placeTwo(flamButton, 48);
+    placeTwo(doubleButton, 56);
+    hintLabel.setBounds(rowTwo);
 
     if (grid)
         grid->refreshSize();
 }
 
+bool GgdDrumEditor::keyPressed(const juce::KeyPress& key)
+{
+    if (grid && grid->hasKeyboardFocus(true))
+        return grid->keyPressed(key);
+    return false;
+}
+
 void GgdDrumEditor::timerCallback()
 {
     initialiseBeta2Ui();
+    initialiseBeta3Ui();
     if (!grid)
         return;
 
@@ -273,6 +308,7 @@ void GgdDrumEditor::timerCallback()
     undoButton.setEnabled(!undoHistory.empty());
     redoButton.setEnabled(!redoHistory.empty());
     updateContextStrip();
+    updateSelectionPropertyControls();
 
     // The interpolated playhead advances between notifier steps, so it needs a
     // repaint every timer frame even when the host notification did not change.

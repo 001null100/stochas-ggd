@@ -3,6 +3,7 @@
 #include "PluginProcessor.h"
 #include "GgdKitMap.h"
 #include "GgdMidiImporter.h"
+#include "GgdMidiExporter.h"
 #include "GgdPatternFile.h"
 #include "GgdLibraryBrowser.h"
 
@@ -44,6 +45,7 @@ private:
     int gridTicks = GGD_TICKS_PER_16TH;
     bool tripletMode = false;
     bool beta2UiInitialised = false;
+    bool beta3UiInitialised = false;
 
     juce::Label productLabel;
     juce::Label transportStatus;
@@ -55,11 +57,13 @@ private:
     juce::Label gridLabel;       // Beta 1 compatibility; hidden by Beta 2.
     juce::Label zoomLabel;
     juce::Label zoomValueLabel;
+    juce::Label probabilityLabel;
     juce::ComboBox kitSelector;
     juce::ComboBox patternSelector;
     juce::ComboBox numeratorSelector;
     juce::ComboBox denominatorSelector;
     juce::ComboBox gridSelector; // Beta 1 compatibility; hidden by Beta 2.
+    juce::ComboBox probabilitySelector;
     juce::TextEditor barsEditor;
     juce::TextEditor patternName;
     juce::TextButton drawModeButton { "Draw" };
@@ -68,6 +72,7 @@ private:
     juce::TextButton redoButton { "Redo" };
     juce::TextButton clearButton { "Clear" };
     juce::TextButton importMidiButton { "Import MIDI" };
+    juce::TextButton exportMidiButton { "Export MIDI" };
     juce::TextButton tripletModeButton { "Triplet" };
     juce::TextButton fitZoomButton { "125%" };
     juce::TextButton selectAllButton { "All" };
@@ -75,10 +80,18 @@ private:
     juce::TextButton pasteButton { "Paste" };
     juce::TextButton velocityDownButton { "Vel -" };
     juce::TextButton velocityUpButton { "Vel +" };
+    juce::TextButton ghostButton { "Ghost" };
+    juce::TextButton accentButton { "Accent" };
+    juce::TextButton probability25Button { "P25" };
+    juce::TextButton probability50Button { "P50" };
+    juce::TextButton probability75Button { "P75" };
+    juce::TextButton probability100Button { "P100" };
     juce::TextButton timingEarlierButton { "Earlier" };
     juce::TextButton timingResetButton { "Quantize" };
     juce::TextButton timingLaterButton { "Later" };
     juce::TextButton humanizeButton { "Humanize" };
+    juce::TextButton flamButton { "Flam" };
+    juce::TextButton doubleButton { "Double" };
     juce::TextButton deleteSelectionButton { "Delete" };
     juce::TextButton patternActionsButton { "Pattern" };
     juce::Slider zoomSlider;
@@ -86,6 +99,7 @@ private:
     std::unique_ptr<GgdDrumGrid> grid;
     std::unique_ptr<GgdLibraryBrowser> libraryBrowser;
     std::unique_ptr<juce::FileChooser> midiFileChooser;
+    std::unique_ptr<juce::FileChooser> midiExportChooser;
     std::unique_ptr<juce::FileChooser> patternSaveChooser;
 
     std::deque<GgdPatternSnapshot> undoHistory;
@@ -98,7 +112,7 @@ private:
     double lastRedoMs = -1000.0;
 
     static constexpr int topAreaHeight = 112;
-    static constexpr int bottomAreaHeight = 38;
+    static constexpr int bottomAreaHeight = 72;
     static constexpr int browserWidth = 310;
     static constexpr size_t maxHistoryDepth = 24;
     static constexpr int maxPatternTicks = SEQ_MAX_STEPS * GGD_TICKS_PER_16TH;
@@ -118,6 +132,8 @@ private:
     void updateGridResolutionForZoom(float scale);
     juce::String currentGridText() const;
     void initialiseBeta2Ui();
+    void initialiseBeta3Ui();
+    void updateSelectionPropertyControls();
 
     GgdPatternSnapshot capturePattern(int pattern) const;
     GgdPatternSnapshot captureCurrentPattern() const;
@@ -133,6 +149,7 @@ private:
     void chooseMidiFile();
     void importMidiFile(const juce::File& file);
     void applyMidiImport(const GgdMidiImportResult& result, const juce::File& sourceFile);
+    void exportCurrentPatternMidi();
     void requestLoadGroove(const juce::File& file);
     void requestLoadPattern(const juce::File& file);
     void applyPatternFile(const juce::File& file, const GgdPatternSnapshot& snapshot);

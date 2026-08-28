@@ -36,6 +36,28 @@ The plugin is currently developed and tested primarily as a **CLAP note effect i
 - Per-hit probability editing.
 - High-resolution MIDI export through the active destination kit mapping.
 - Undo/redo for pattern editing.
+- Four persistent UI themes with a shared readability-first timing hierarchy.
+
+## Appearance and timeline hierarchy
+
+Beta 4 treats timing hierarchy as part of the editor model rather than incidental decoration. Every theme has dedicated semantic colours for:
+
+1. **Bar boundaries**: strongest, full-height dividers.
+2. **Beat boundaries**: full-height but clearly secondary.
+3. **Primary subdivisions**: quieter guides for the active straight or triplet grid.
+4. **Fine subdivisions**: the quietest layer, shown only at high zoom.
+5. **Instrument-family headers**: dedicated bands and separators distinct from ordinary articulation rows.
+
+The playhead has its own colour instead of reusing the hit accent, and selected hits use a separate high-contrast outline/glow so transport, content and selection remain easy to distinguish.
+
+Current themes:
+
+- **Graphite**: neutral dark teal default.
+- **Midnight**: cool navy/cyan.
+- **Ember**: warm dark amber.
+- **Contrast**: maximum separation for low-light and accessibility-focused use.
+
+Theme choice is stored locally as an appearance preference and does not alter project or pattern data.
 
 ## Built-in GGD mappings
 
@@ -63,7 +85,7 @@ The right-side browser has separate roots for:
 - **Grooves:** `.mid` / `.midi` files
 - **Patterns:** Stochas GGD `.sggdp` files
 
-Folder locations are remembered locally. Double-click a file to load it. The filter field searches filenames and relative folder paths; clearing the filter returns to the normal collapsible folder tree.
+Folder locations are remembered locally. Double-click a file to load it. The filter field searches filenames and relative folder paths; clearing the filter returns to the normal collapsible folder tree. The browser follows the active UI theme and keeps loaded and selected rows visually distinct.
 
 ## MIDI import and export
 

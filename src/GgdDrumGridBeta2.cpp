@@ -1,12 +1,21 @@
 #include "GgdDrumGridBeta.h"
+#include "GgdUiTheme.h"
 
 // Keep all Beta 1 event editing/interaction behavior intact and replace only
-// the two presentation methods which regressed during the engine transition.
+// the presentation methods which regressed during the engine transition.
 #define setPlayPosition setPlayPositionLegacy
 #define paint paintLegacy
 #include "GgdDrumGridBeta.cpp"
 #undef paint
 #undef setPlayPosition
+
+namespace
+{
+juce::Colour gc(GgdThemeRole role)
+{
+    return ggdThemeColour(role);
+}
+}
 
 void GgdDrumGrid::setPlayPosition(int stepPosition)
 {
@@ -40,8 +49,6 @@ void GgdDrumGrid::setPlayPosition(int stepPosition)
             }
             else
             {
-                // Light smoothing keeps the playhead fluid without becoming
-                // sluggish when tempo changes.
                 playStepMs = playStepMs * 0.72 + observed * 0.28;
             }
         }
@@ -53,8 +60,6 @@ void GgdDrumGrid::setPlayPosition(int stepPosition)
         playStepStartMs = now;
     }
 
-    // Repaint even while the notifier remains on the same 1/16 step so the
-    // timer can interpolate continuously between engine notifications.
     repaint();
 }
 
@@ -71,8 +76,6 @@ float GgdDrumGrid::interpolatedPlayTick() const
     if (hasPlayStepEstimate && playStepMs > 0.0)
     {
         const double elapsed = juce::Time::getMillisecondCounterHiRes() - playStepStartMs;
-        // A small amount of bounded extrapolation avoids a visible freeze if a
-        // host UI notification arrives a frame late.
         const double fraction = juce::jlimit(0.0, 1.20, elapsed / playStepMs);
         tick += fraction * GGD_TICKS_PER_16TH;
     }
@@ -85,7 +88,7 @@ float GgdDrumGrid::interpolatedPlayTick() const
 
 void GgdDrumGrid::paint(juce::Graphics& g)
 {
-    g.fillAll(c(outside));
+    g.fillAll(gc(GgdThemeRole::outside));
 
     const int length = patternLengthTicks();
     const int barTicks = ticksPerBar();
@@ -104,36 +107,38 @@ void GgdDrumGrid::paint(juce::Graphics& g)
     const int activeWidth = juce::jmax(0, gridRight - gridLeft);
     const int stickyX = currentViewX();
 
-    g.setColour(c(bg));
+    g.setColour(gc(GgdThemeRole::background));
     g.fillRect(gridLeft, 0, activeWidth, getHeight());
-    g.setColour(c(panel));
+    g.setColour(gc(GgdThemeRole::panel));
     g.fillRect(gridLeft, 0, activeWidth, rulerHeight);
 
-    // Alternating bars were one of the useful visual anchors in Alpha 10.
+    // Alternating bar shading is intentionally subtle. The actual structural
+    // hierarchy comes from dedicated bar/beat/subdivision colours below.
     for (int barStart = 0, bar = 0; barStart < length; barStart += barTicks, ++bar)
     {
         const float x0 = xForTick(static_cast<float>(barStart));
         const float x1 = xForTick(static_cast<float>(juce::jmin(length, barStart + barTicks)));
         if ((bar & 1) != 0)
         {
-            g.setColour(c(panelRaised).withAlpha(0.25f));
+            g.setColour(gc(GgdThemeRole::panelRaised).withAlpha(0.20f));
             g.fillRect(juce::Rectangle<float>(
                 x0, 0.0f, x1 - x0, static_cast<float>(getHeight())));
         }
 
-        g.setColour(c(text));
+        g.setColour(gc(GgdThemeRole::text).withAlpha(0.94f));
         g.setFont(juce::Font(11.5f, juce::Font::bold));
         g.drawText("BAR " + juce::String(bar + 1),
-                   static_cast<int>(std::round(x0)) + 8, 4,
+                   static_cast<int>(std::round(x0)) + 9, 4,
                    juce::jmax(44, static_cast<int>(std::round(x1 - x0)) - 12),
                    17, juce::Justification::centredLeft, false);
     }
 
-    // Ruler hierarchy: bars > beats > primary subdivision > fine subdivision.
+    // Ruler hierarchy: bar > beat > primary subdivision > fine subdivision.
+    // Explicit palette roles keep this ordering intact across every theme.
     for (int tick = 0; tick <= length; tick += barTicks)
     {
         const int x = static_cast<int>(std::round(xForTick(static_cast<float>(tick))));
-        g.setColour(c(accent2).withAlpha(0.84f));
+        g.setColour(gc(GgdThemeRole::barLine));
         g.fillRect(x - 1, 0, 2, rulerHeight);
     }
 
@@ -142,8 +147,8 @@ void GgdDrumGrid::paint(juce::Graphics& g)
         if (tick % barTicks == 0)
             continue;
         const int x = static_cast<int>(std::round(xForTick(static_cast<float>(tick))));
-        g.setColour(c(border).brighter(0.48f).withAlpha(0.98f));
-        g.fillRect(x, rulerHeight - 18, 1, 18);
+        g.setColour(gc(GgdThemeRole::beatLine).withAlpha(0.96f));
+        g.fillRect(x, rulerHeight - 21, 1, 21);
     }
 
     for (int tick = 0; tick <= length; tick += majorSubdivisionTicks)
@@ -151,8 +156,8 @@ void GgdDrumGrid::paint(juce::Graphics& g)
         if (tick % barTicks == 0 || tick % beatTicks == 0)
             continue;
         const int x = static_cast<int>(std::round(xForTick(static_cast<float>(tick))));
-        g.setColour(c(border).brighter(0.08f).withAlpha(0.84f));
-        g.fillRect(x, rulerHeight - 9, 1, 9);
+        g.setColour(gc(GgdThemeRole::subdivisionLine).withAlpha(0.90f));
+        g.fillRect(x, rulerHeight - 11, 1, 11);
     }
 
     if (fineGrid)
@@ -162,12 +167,11 @@ void GgdDrumGrid::paint(juce::Graphics& g)
             if (tick % majorSubdivisionTicks == 0)
                 continue;
             const int x = static_cast<int>(std::round(xForTick(static_cast<float>(tick))));
-            g.setColour(c(border).withAlpha(0.52f));
-            g.fillRect(x, rulerHeight - 5, 1, 5);
+            g.setColour(gc(GgdThemeRole::fineSubdivisionLine).withAlpha(0.84f));
+            g.fillRect(x, rulerHeight - 6, 1, 6);
         }
     }
 
-    // Beat numbers are deliberately independent of snap mode.
     for (int barStart = 0; barStart < length; barStart += barTicks)
     {
         for (int beat = 0; beat < meterNumerator; ++beat)
@@ -176,7 +180,7 @@ void GgdDrumGrid::paint(juce::Graphics& g)
             if (tick >= length)
                 break;
             const float x = xForTick(static_cast<float>(tick));
-            g.setColour(c(muted).withAlpha(0.90f));
+            g.setColour(gc(GgdThemeRole::muted).withAlpha(0.96f));
             g.setFont(10.0f);
             g.drawText(juce::String(beat + 1),
                        static_cast<int>(std::round(x)) + 5, 21,
@@ -186,7 +190,7 @@ void GgdDrumGrid::paint(juce::Graphics& g)
         }
     }
 
-    g.setColour(c(border).brighter(0.08f));
+    g.setColour(gc(GgdThemeRole::borderStrong).withAlpha(0.72f));
     g.drawHorizontalLine(rulerHeight - 1, static_cast<float>(gridLeft),
                          static_cast<float>(gridRight));
 
@@ -195,17 +199,18 @@ void GgdDrumGrid::paint(juce::Graphics& g)
     {
         if (item.header)
         {
-            g.setColour(c(panelRaised));
+            g.setColour(gc(GgdThemeRole::groupFill));
             g.fillRect(gridLeft, item.y, activeWidth, item.height);
-            g.setColour(c(accent2).withAlpha(0.70f));
-            g.fillRect(gridLeft, item.y, activeWidth, 2);
-            g.setColour(c(border).brighter(0.22f).withAlpha(0.92f));
+            g.setColour(gc(GgdThemeRole::groupLine).withAlpha(0.95f));
+            g.fillRect(gridLeft, item.y, activeWidth, 3);
+            g.setColour(gc(GgdThemeRole::borderStrong).withAlpha(0.68f));
             g.fillRect(gridLeft, item.y + item.height - 1, activeWidth, 1);
             continue;
         }
 
         const bool alternate = (visibleRowIndex++ & 1) != 0;
-        g.setColour(alternate ? c(panelRaised).withAlpha(0.32f) : c(bg));
+        g.setColour(alternate ? gc(GgdThemeRole::rowAlternate)
+                              : gc(GgdThemeRole::background));
         g.fillRect(gridLeft, item.y, activeWidth, item.height);
 
         for (int barStart = 0, bar = 0; barStart < length; barStart += barTicks, ++bar)
@@ -214,22 +219,22 @@ void GgdDrumGrid::paint(juce::Graphics& g)
                 continue;
             const float x0 = xForTick(static_cast<float>(barStart));
             const float x1 = xForTick(static_cast<float>(juce::jmin(length, barStart + barTicks)));
-            g.setColour(c(panelSoft).withAlpha(0.10f));
+            g.setColour(gc(GgdThemeRole::panelSoft).withAlpha(0.10f));
             g.fillRect(juce::Rectangle<float>(
                 x0, static_cast<float>(item.y), x1 - x0, static_cast<float>(item.height)));
         }
 
-        g.setColour(c(border).withAlpha(0.42f));
+        g.setColour(gc(GgdThemeRole::borderSoft).withAlpha(0.58f));
         g.drawHorizontalLine(item.y + item.height - 1,
                              static_cast<float>(gridLeft),
                              static_cast<float>(gridRight));
 
-        const float rowMid = static_cast<float>(item.y) + item.height * 0.5f;
-
+        // Full-height vertical timing lines make the rhythm structure readable
+        // through dense patterns. Strength, width and colour encode hierarchy.
         for (int tick = 0; tick <= length; tick += barTicks)
         {
             const int x = static_cast<int>(std::round(xForTick(static_cast<float>(tick))));
-            g.setColour(c(accent2).withAlpha(0.74f));
+            g.setColour(gc(GgdThemeRole::barLine).withAlpha(0.90f));
             g.fillRect(x - 1, item.y, 2, item.height);
         }
 
@@ -238,7 +243,7 @@ void GgdDrumGrid::paint(juce::Graphics& g)
             if (tick % barTicks == 0)
                 continue;
             const int x = static_cast<int>(std::round(xForTick(static_cast<float>(tick))));
-            g.setColour(c(border).brighter(0.42f).withAlpha(0.96f));
+            g.setColour(gc(GgdThemeRole::beatLine).withAlpha(0.82f));
             g.fillRect(x, item.y, 1, item.height);
         }
 
@@ -247,19 +252,20 @@ void GgdDrumGrid::paint(juce::Graphics& g)
             if (tick % barTicks == 0 || tick % beatTicks == 0)
                 continue;
             const int x = static_cast<int>(std::round(xForTick(static_cast<float>(tick))));
-            g.setColour(c(border).brighter(0.04f).withAlpha(0.78f));
-            g.drawVerticalLine(x, rowMid - 7.0f, rowMid + 7.0f);
+            g.setColour(gc(GgdThemeRole::subdivisionLine).withAlpha(0.54f));
+            g.fillRect(x, item.y, 1, item.height);
         }
 
         if (fineGrid)
         {
+            const float rowMid = static_cast<float>(item.y) + item.height * 0.5f;
             for (int tick = 0; tick <= length; tick += minorSubdivisionTicks)
             {
                 if (tick % majorSubdivisionTicks == 0)
                     continue;
                 const int x = static_cast<int>(std::round(xForTick(static_cast<float>(tick))));
-                g.setColour(c(border).withAlpha(0.46f));
-                g.drawVerticalLine(x, rowMid - 4.0f, rowMid + 4.0f);
+                g.setColour(gc(GgdThemeRole::fineSubdivisionLine).withAlpha(0.66f));
+                g.drawVerticalLine(x, rowMid - 5.0f, rowMid + 5.0f);
             }
         }
     }
@@ -271,12 +277,15 @@ void GgdDrumGrid::paint(juce::Graphics& g)
         {
             const float x = xForTick(static_cast<float>(hoverTick));
             const float w = juce::jmax(
-                3.0f, static_cast<float>(snapTicks) / GGD_EVENT_PPQ
+                5.0f, static_cast<float>(snapTicks) / GGD_EVENT_PPQ
                     * pixelsPerQuarter * zoomScale);
-            g.setColour(c(accent).withAlpha(0.075f));
-            g.fillRoundedRectangle(
-                x - w * 0.5f + 1.0f, static_cast<float>(y + 2),
-                juce::jmax(1.0f, w - 2.0f), static_cast<float>(rowHeight - 4), 4.0f);
+            const auto target = juce::Rectangle<float>(
+                x - w * 0.5f + 1.0f, static_cast<float>(y + 3),
+                juce::jmax(2.0f, w - 2.0f), static_cast<float>(rowHeight - 6));
+            g.setColour(gc(GgdThemeRole::accent).withAlpha(0.08f));
+            g.fillRoundedRectangle(target, 4.0f);
+            g.setColour(gc(GgdThemeRole::accent).withAlpha(0.35f));
+            g.drawRoundedRectangle(target, 4.0f, 1.0f);
         }
     }
 
@@ -306,20 +315,28 @@ void GgdDrumGrid::paint(juce::Graphics& g)
 
             if (ghost)
             {
-                g.setColour(c(accent).withAlpha(0.22f + 0.42f * v));
-                g.drawRoundedRectangle(hit, juce::jmin(4.0f, hitW * 0.35f), 1.5f);
+                g.setColour(gc(GgdThemeRole::accent).withAlpha(0.14f + 0.26f * v));
+                g.fillRoundedRectangle(hit, juce::jmin(4.0f, hitW * 0.35f));
+                g.setColour(gc(GgdThemeRole::accent).withAlpha(0.66f));
+                g.drawRoundedRectangle(hit, juce::jmin(4.0f, hitW * 0.35f), 1.4f);
             }
             else
             {
-                g.setColour(c(accent).withAlpha(0.46f + 0.50f * v));
+                g.setColour(gc(GgdThemeRole::accent).withAlpha(0.16f));
+                g.fillRoundedRectangle(hit.expanded(1.5f),
+                                       juce::jmin(5.0f, hitW * 0.35f + 1.0f));
+                g.setColour(gc(GgdThemeRole::accent).withAlpha(0.56f + 0.40f * v));
                 g.fillRoundedRectangle(hit, juce::jmin(4.0f, hitW * 0.35f));
             }
 
             if (isSelected(ref))
             {
-                g.setColour(c(text).withAlpha(0.98f));
+                g.setColour(gc(GgdThemeRole::selection).withAlpha(0.16f));
+                g.fillRoundedRectangle(hit.expanded(4.0f),
+                                       juce::jmin(6.0f, hitW * 0.35f + 2.0f));
+                g.setColour(gc(GgdThemeRole::selection));
                 g.drawRoundedRectangle(
-                    hit.expanded(2.5f), juce::jmin(5.0f, hitW * 0.35f + 1.0f), 1.7f);
+                    hit.expanded(2.5f), juce::jmin(5.0f, hitW * 0.35f + 1.0f), 1.8f);
             }
         }
     }
@@ -334,7 +351,7 @@ void GgdDrumGrid::paint(juce::Graphics& g)
             if (y < 0 || tick < 0 || tick >= length)
                 continue;
             const float x = xForTick(static_cast<float>(tick));
-            g.setColour(c(warm).withAlpha(0.55f));
+            g.setColour(gc(GgdThemeRole::warm).withAlpha(0.72f));
             g.fillRoundedRectangle(x - 5.0f, y + rowHeight * 0.5f - 5.0f,
                                    10.0f, 10.0f, 3.0f);
         }
@@ -342,9 +359,9 @@ void GgdDrumGrid::paint(juce::Graphics& g)
 
     if (dragMode == DragMode::marquee)
     {
-        g.setColour(c(accent).withAlpha(0.10f));
+        g.setColour(gc(GgdThemeRole::accent).withAlpha(0.10f));
         g.fillRect(marqueeRect);
-        g.setColour(c(accent).withAlpha(0.88f));
+        g.setColour(gc(GgdThemeRole::accent).withAlpha(0.92f));
         g.drawRect(marqueeRect, 1.2f);
     }
 
@@ -352,29 +369,39 @@ void GgdDrumGrid::paint(juce::Graphics& g)
     if (smoothTick >= 0.0f)
     {
         const float playX = xForTick(smoothTick);
-        g.setColour(c(accent).withAlpha(0.10f));
+        const auto playhead = gc(GgdThemeRole::playhead);
+        g.setColour(playhead.withAlpha(0.08f));
         g.fillRect(juce::Rectangle<float>(
-            playX - 3.0f, static_cast<float>(rulerHeight), 6.0f,
+            playX - 4.0f, static_cast<float>(rulerHeight), 8.0f,
             static_cast<float>(getHeight() - rulerHeight)));
-        g.setColour(c(accent).withAlpha(0.94f));
+        g.setColour(playhead.withAlpha(0.96f));
         g.fillRect(juce::Rectangle<float>(
             playX - 1.0f, 0.0f, 2.0f, static_cast<float>(getHeight())));
+
+        juce::Path marker;
+        marker.addTriangle(playX - 5.0f, 0.0f,
+                           playX + 5.0f, 0.0f,
+                           playX, 7.0f);
+        g.setColour(playhead);
+        g.fillPath(marker);
     }
 
-    g.setColour(c(accent2).withAlpha(0.82f));
+    g.setColour(gc(GgdThemeRole::barLine).withAlpha(0.82f));
     g.fillRect(gridRight - 1, 0, 2, getHeight());
 
     // Sticky labels are painted after the playhead so the timeline never bleeds
     // through the articulation column while horizontally scrolled.
-    g.setColour(c(panel));
+    g.setColour(gc(GgdThemeRole::panel));
     g.fillRect(stickyX, 0, nameWidth, rulerHeight);
-    g.setColour(c(text));
+    g.setColour(gc(GgdThemeRole::borderStrong).withAlpha(0.62f));
+    g.fillRect(stickyX + nameWidth - 1, 0, 1, getHeight());
+    g.setColour(gc(GgdThemeRole::text));
     g.setFont(juce::Font(11.5f, juce::Font::bold));
     g.drawText(toolMode == ToolMode::draw
-                   ? "ARTICULATIONS | DRAW" : "ARTICULATIONS | SELECT",
+                   ? "ARTICULATIONS  |  DRAW" : "ARTICULATIONS  |  SELECT",
                stickyX + 16, 3, nameWidth - 32, 18,
                juce::Justification::centredLeft, false);
-    g.setColour(c(muted));
+    g.setColour(gc(GgdThemeRole::muted));
     g.setFont(10.0f);
 
     juce::String gridText = "1/16";
@@ -382,7 +409,7 @@ void GgdDrumGrid::paint(juce::Graphics& g)
     else if (snapTicks == GGD_TICKS_PER_8TH_TRIPLET) gridText = "1/8T";
     else if (snapTicks == GGD_TICKS_PER_16TH_TRIPLET) gridText = "1/16T";
     const auto zoomCaption = juce::String(static_cast<int>(std::round(zoomScale * 100.0f)))
-                           + "% | " + gridText + " GRID";
+                           + "%  |  " + gridText + " GRID";
     g.drawText(zoomCaption, stickyX + 16, 21, nameWidth - 32, 17,
                juce::Justification::centredLeft, false);
 
@@ -391,37 +418,52 @@ void GgdDrumGrid::paint(juce::Graphics& g)
     {
         if (item.header)
         {
-            g.setColour(c(panelRaised));
+            g.setColour(gc(GgdThemeRole::groupFill));
             g.fillRect(stickyX, item.y, nameWidth, item.height);
-            g.setColour(c(accent2).withAlpha(0.82f));
-            g.fillRect(stickyX, item.y, 4, item.height);
-            g.fillRect(stickyX, item.y, nameWidth, 2);
-            g.setColour(c(border).brighter(0.22f).withAlpha(0.92f));
+            g.setColour(gc(GgdThemeRole::groupLine));
+            g.fillRect(stickyX, item.y, 5, item.height);
+            g.fillRect(stickyX, item.y, nameWidth, 3);
+            g.setColour(gc(GgdThemeRole::borderStrong).withAlpha(0.70f));
             g.fillRect(stickyX, item.y + item.height - 1, nameWidth, 1);
-            g.setColour(c(text).withAlpha(0.82f));
-            g.setFont(juce::Font(10.5f, juce::Font::bold));
+
             const bool collapsed = collapsedGroups.count(item.groupId) != 0;
-            const auto caption = juce::String(collapsed ? "[+] " : "[-] ")
-                               + item.groupLabel.toUpperCase();
-            g.drawText(caption, stickyX + 17, item.y, nameWidth - 30, item.height,
+            const float arrowX = static_cast<float>(stickyX + 18);
+            const float arrowY = static_cast<float>(item.y + item.height / 2);
+            juce::Path arrow;
+            if (collapsed)
+                arrow.addTriangle(arrowX - 2.5f, arrowY - 4.0f,
+                                  arrowX - 2.5f, arrowY + 4.0f,
+                                  arrowX + 3.5f, arrowY);
+            else
+                arrow.addTriangle(arrowX - 4.0f, arrowY - 2.5f,
+                                  arrowX + 4.0f, arrowY - 2.5f,
+                                  arrowX, arrowY + 3.5f);
+            g.setColour(gc(GgdThemeRole::groupLine));
+            g.fillPath(arrow);
+
+            g.setColour(gc(GgdThemeRole::text).withAlpha(0.92f));
+            g.setFont(juce::Font(10.8f, juce::Font::bold));
+            g.drawText(item.groupLabel.toUpperCase(), stickyX + 30, item.y,
+                       nameWidth - 42, item.height,
                        juce::Justification::centredLeft, false);
             continue;
         }
 
         const bool alternate = (visibleRowIndex++ & 1) != 0;
-        g.setColour(alternate ? c(panelRaised) : c(panel));
+        g.setColour(alternate ? gc(GgdThemeRole::rowAlternate)
+                              : gc(GgdThemeRole::panel));
         g.fillRect(stickyX, item.y, nameWidth, item.height);
-        g.setColour(c(border).withAlpha(0.50f));
+        g.setColour(gc(GgdThemeRole::borderSoft).withAlpha(0.62f));
         g.drawHorizontalLine(item.y + item.height - 1,
                              static_cast<float>(stickyX),
                              static_cast<float>(stickyX + nameWidth));
-        g.setColour(c(text));
+        g.setColour(gc(GgdThemeRole::text));
         g.setFont(12.0f);
         g.drawText(item.label, stickyX + 16, item.y + 1, nameWidth - 78,
                    item.height - 2, juce::Justification::centredLeft, true);
         if (item.noteName.isNotEmpty())
         {
-            g.setColour(c(muted));
+            g.setColour(gc(GgdThemeRole::muted));
             g.setFont(10.0f);
             g.drawText(item.noteName, stickyX + nameWidth - 64, item.y + 1, 48,
                        item.height - 2, juce::Justification::centredRight, false);

@@ -18,6 +18,11 @@ namespace
 {
 constexpr float defaultZoomScale = 1.25f;
 constexpr float detail32ZoomThreshold = 3.5f;
+
+juce::Colour ui(GgdThemeRole role)
+{
+    return ggdThemeColour(role);
+}
 }
 
 void GgdDrumEditor::initialiseBeta2Ui()
@@ -34,8 +39,6 @@ void GgdDrumEditor::initialiseBeta2Ui()
     transportStatus.setText("READY", juce::dontSendNotification);
     transportStatus.setFont(juce::Font(10.5f, juce::Font::bold));
     transportStatus.setJustificationType(juce::Justification::centred);
-    transportStatus.setColour(juce::Label::textColourId, c(muted));
-    transportStatus.setColour(juce::Label::backgroundColourId, c(panelRaised));
 
     gridLabel.setVisible(false);
     gridSelector.setVisible(false);
@@ -73,6 +76,7 @@ void GgdDrumEditor::initialiseBeta2Ui()
 
     updateGridResolutionForZoom(grid ? grid->getZoomScale() : defaultZoomScale);
     initialiseBeta3Ui();
+    initialiseBeta4Ui();
     resized();
 }
 
@@ -104,33 +108,46 @@ void GgdDrumEditor::updateGridResolutionForZoom(float scale)
 
 void GgdDrumEditor::paint(juce::Graphics& g)
 {
-    g.fillAll(c(bg));
+    g.fillAll(ui(GgdThemeRole::background));
 
+    // Two subtle header shelves make the toolbar scannable without turning it
+    // into a pile of unrelated boxes. Controls themselves retain generous dark
+    // negative space, while the timing/editor region owns the brightest accent.
     juce::ColourGradient header(
-        c(panelRaised), 0.0f, 0.0f,
-        c(panel), 0.0f, static_cast<float>(topAreaHeight), false);
+        ui(GgdThemeRole::panelRaised), 0.0f, 0.0f,
+        ui(GgdThemeRole::panel), 0.0f, static_cast<float>(topAreaHeight), false);
     g.setGradientFill(header);
     g.fillRect(0, 0, getWidth(), topAreaHeight);
 
-    g.setColour(c(accent2).withAlpha(0.44f));
-    g.fillRect(0, topAreaHeight - 2, getWidth(), 2);
-
-    g.setColour(c(panel));
-    g.fillRect(0, getHeight() - bottomAreaHeight, getWidth(), bottomAreaHeight);
-    g.setColour(c(border).withAlpha(0.90f));
-    g.drawHorizontalLine(getHeight() - bottomAreaHeight, 0.0f,
-                         static_cast<float>(getWidth()));
-    g.setColour(c(border).withAlpha(0.42f));
-    g.drawHorizontalLine(getHeight() - bottomAreaHeight + 35, 8.0f,
-                         static_cast<float>(juce::jmax(8, getWidth() - browserWidth - 8)));
-
-    g.setColour(c(border).withAlpha(0.44f));
+    g.setColour(ui(GgdThemeRole::borderSoft).withAlpha(0.72f));
     g.drawHorizontalLine(55, 12.0f, static_cast<float>(getWidth() - 12));
 
-    // Make the browser's ownership of the right column unambiguous.
+    g.setColour(ui(GgdThemeRole::accentSecondary).withAlpha(0.70f));
+    g.fillRect(0, topAreaHeight - 2, getWidth(), 2);
+
     const int editorWidth = juce::jmax(780, getWidth() - browserWidth);
-    g.setColour(c(accent2).withAlpha(0.32f));
+    const int stripY = getHeight() - bottomAreaHeight;
+    g.setColour(ui(GgdThemeRole::panel));
+    g.fillRect(0, stripY, editorWidth, bottomAreaHeight);
+
+    // Two action lanes are visually grouped but not boxed around every button.
+    // This keeps the strip readable when many selection tools are visible.
+    g.setColour(ui(GgdThemeRole::panelRaised).withAlpha(0.55f));
+    g.fillRoundedRectangle(7.0f, static_cast<float>(stripY + 4),
+                           static_cast<float>(editorWidth - 14), 29.0f, 5.0f);
+    g.fillRoundedRectangle(7.0f, static_cast<float>(stripY + 38),
+                           static_cast<float>(editorWidth - 14), 29.0f, 5.0f);
+
+    g.setColour(ui(GgdThemeRole::border).withAlpha(0.90f));
+    g.drawHorizontalLine(stripY, 0.0f, static_cast<float>(editorWidth));
+
+    // The browser owns a real visual column. A strong edge prevents the tree
+    // and timeline from visually bleeding together at low brightness.
+    g.setColour(ui(GgdThemeRole::borderStrong).withAlpha(0.58f));
     g.fillRect(editorWidth - 1, topAreaHeight, 1,
+               juce::jmax(0, getHeight() - topAreaHeight));
+    g.setColour(ui(GgdThemeRole::accentSecondary).withAlpha(0.22f));
+    g.fillRect(editorWidth, topAreaHeight, 2,
                juce::jmax(0, getHeight() - topAreaHeight));
 }
 
@@ -155,6 +172,12 @@ void GgdDrumEditor::resized()
     first.removeFromLeft(5);
     exportMidiButton.setBounds(first.removeFromLeft(88).reduced(0, 5));
     first.removeFromLeft(gap);
+
+    // Appearance is global rather than pattern-level, so keep it at the far
+    // right and let the pattern name consume the remaining flexible width.
+    auto themeArea = first.removeFromRight(112);
+    themeSelector.setBounds(themeArea.reduced(0, 5));
+    first.removeFromRight(gap);
     patternName.setBounds(first.reduced(0, 5));
 
     auto second = juce::Rectangle<int>(pad, 60, editorWidth - pad * 2, 43);
@@ -193,7 +216,7 @@ void GgdDrumEditor::resized()
     zoomSlider.setBounds(second.reduced(0, 7));
 
     // Keep Beta 1's explicit resolution widgets out of the layout. Resolution
-    // is now a zoom-derived property with one Triplet-mode toggle.
+    // is a zoom-derived property with one Triplet-mode toggle.
     gridLabel.setBounds({});
     gridSelector.setBounds({});
     gridLabel.setVisible(false);
@@ -251,7 +274,7 @@ void GgdDrumEditor::resized()
     placeTwo(humanizeButton, 68);
     placeTwo(flamButton, 48);
     placeTwo(doubleButton, 56);
-    hintLabel.setBounds(rowTwo);
+    hintLabel.setBounds(rowTwo.reduced(5, 0));
 
     if (grid)
         grid->refreshSize();
@@ -268,6 +291,7 @@ void GgdDrumEditor::timerCallback()
 {
     initialiseBeta2Ui();
     initialiseBeta3Ui();
+    initialiseBeta4Ui();
     if (!grid)
         return;
 
@@ -296,12 +320,14 @@ void GgdDrumEditor::timerCallback()
 
     if (play >= 0)
     {
-        transportStatus.setColour(juce::Label::textColourId, c(accent));
+        transportStatus.setColour(juce::Label::textColourId,
+                                  ui(GgdThemeRole::accent));
         transportStatus.setText("PLAY", juce::dontSendNotification);
     }
     else
     {
-        transportStatus.setColour(juce::Label::textColourId, c(muted));
+        transportStatus.setColour(juce::Label::textColourId,
+                                  ui(GgdThemeRole::muted));
         transportStatus.setText("READY", juce::dontSendNotification);
     }
 

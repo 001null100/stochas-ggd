@@ -94,15 +94,17 @@ include_directories(src)
 target_include_directories(stochas PRIVATE "${CMAKE_BINARY_DIR}/geninclude")
 juce_generate_juce_header(stochas)
 
-# Beta 3 keeps Beta 2's restored editor and event engine intact, then layers
-# workflow features on top: selection probability/velocity tools, real event
-# flam/double transforms, browser polish and semantic high-resolution MIDI export.
+# Beta 4 leaves the event engine and Beta 3 workflow features intact, then
+# layers a shared theme system and readability-first presentation polish over
+# the editor, timeline and Grooves / Patterns browser.
 target_sources(stochas PRIVATE
     src/EditorState.cpp
     src/GgdDrumEditorBeta2.cpp
     src/GgdDrumEditorBeta3.cpp
+    src/GgdDrumEditorBeta4.cpp
     src/GgdDrumGridBeta2.cpp
     src/GgdDrumGridBeta3.cpp
+    src/GgdUiTheme.cpp
     src/GgdEventModel.cpp
     src/GgdSequenceEvents.cpp
     src/GgdEventPersist.cpp

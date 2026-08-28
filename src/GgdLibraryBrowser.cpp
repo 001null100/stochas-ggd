@@ -1,5 +1,6 @@
 #include "GgdLibraryBrowser.h"
 #include "GgdPatternFile.h"
+#include "GgdUiTheme.h"
 
 #include <algorithm>
 #include <vector>
@@ -14,7 +15,7 @@ constexpr juce::uint32 browserMuted = 0xff8d99a5;
 constexpr juce::uint32 browserAccent = 0xff70d6c1;
 constexpr int maxFilterResults = 500;
 
-juce::Colour colour(juce::uint32 value) { return juce::Colour(value); }
+juce::Colour colour(juce::uint32 value) { return ggdLegacyThemeColour(value); }
 
 bool matchesFile(const juce::File& file, bool patterns)
 {
@@ -101,26 +102,30 @@ public:
 
         if (loaded)
         {
-            g.setColour(colour(browserAccent).withAlpha(0.25f));
-            g.fillRect(0, 0, width, height);
+            g.setColour(colour(browserAccent).withAlpha(0.18f));
+            g.fillRoundedRectangle(2.0f, 1.0f, static_cast<float>(width - 4),
+                                   static_cast<float>(height - 2), 4.0f);
             g.setColour(colour(browserAccent));
-            g.fillRect(0, 0, 4, height);
+            g.fillRoundedRectangle(2.0f, 3.0f, 3.0f,
+                                   static_cast<float>(height - 6), 1.5f);
         }
         else if (selected)
         {
-            g.setColour(colour(browserAccent).withAlpha(0.11f));
-            g.fillRect(0, 0, width, height);
-            g.setColour(colour(browserAccent).withAlpha(0.75f));
-            g.drawRect(0, 0, width, height, 1);
+            g.setColour(colour(browserAccent).withAlpha(0.10f));
+            g.fillRoundedRectangle(2.0f, 1.0f, static_cast<float>(width - 4),
+                                   static_cast<float>(height - 2), 4.0f);
+            g.setColour(colour(browserAccent).withAlpha(0.72f));
+            g.drawRoundedRectangle(2.5f, 1.5f, static_cast<float>(width - 5),
+                                   static_cast<float>(height - 3), 4.0f, 1.0f);
         }
 
-        g.setColour(directory ? colour(browserText).withAlpha(0.90f)
+        g.setColour(directory ? colour(browserText).withAlpha(0.94f)
                               : colour(browserText));
         g.setFont(juce::Font(directory ? 11.5f : 11.0f,
                              (directory || loaded) ? juce::Font::bold : juce::Font::plain));
         const int suffixWidth = loaded ? 58 : 6;
         g.drawText(file.getFileNameWithoutExtension(),
-                   7, 0, juce::jmax(0, width - suffixWidth - 7), height,
+                   9, 0, juce::jmax(0, width - suffixWidth - 9), height,
                    juce::Justification::centredLeft, true);
 
         if (loaded)
@@ -149,7 +154,7 @@ public:
             onOpen(file);
     }
 
-    int getItemHeight() const override { return file.isDirectory() ? 24 : 22; }
+    int getItemHeight() const override { return file.isDirectory() ? 25 : 23; }
 
 private:
     juce::File file;
@@ -181,22 +186,26 @@ public:
         const bool loaded = isLoaded && isLoaded(file);
         if (loaded)
         {
-            g.setColour(colour(browserAccent).withAlpha(0.25f));
-            g.fillRect(0, 0, width, height);
+            g.setColour(colour(browserAccent).withAlpha(0.18f));
+            g.fillRoundedRectangle(2.0f, 1.0f, static_cast<float>(width - 4),
+                                   static_cast<float>(height - 2), 4.0f);
             g.setColour(colour(browserAccent));
-            g.fillRect(0, 0, 4, height);
+            g.fillRoundedRectangle(2.0f, 3.0f, 3.0f,
+                                   static_cast<float>(height - 6), 1.5f);
         }
         else if (isSelected())
         {
-            g.setColour(colour(browserAccent).withAlpha(0.11f));
-            g.fillRect(0, 0, width, height);
-            g.setColour(colour(browserAccent).withAlpha(0.75f));
-            g.drawRect(0, 0, width, height, 1);
+            g.setColour(colour(browserAccent).withAlpha(0.10f));
+            g.fillRoundedRectangle(2.0f, 1.0f, static_cast<float>(width - 4),
+                                   static_cast<float>(height - 2), 4.0f);
+            g.setColour(colour(browserAccent).withAlpha(0.72f));
+            g.drawRoundedRectangle(2.5f, 1.5f, static_cast<float>(width - 5),
+                                   static_cast<float>(height - 3), 4.0f, 1.0f);
         }
 
         g.setColour(colour(browserText));
         g.setFont(juce::Font(10.5f, loaded ? juce::Font::bold : juce::Font::plain));
-        g.drawText(display, 7, 0, juce::jmax(0, width - (loaded ? 62 : 8)), height,
+        g.drawText(display, 9, 0, juce::jmax(0, width - (loaded ? 62 : 8)), height,
                    juce::Justification::centredLeft, true);
 
         if (loaded)
@@ -219,7 +228,7 @@ public:
             onOpen(file);
     }
 
-    int getItemHeight() const override { return 23; }
+    int getItemHeight() const override { return 24; }
 
 private:
     juce::File file;
@@ -264,19 +273,11 @@ public:
             addAndMakeVisible(saveButton);
         }
 
-        rootLabel.setColour(juce::Label::textColourId, colour(browserMuted));
         rootLabel.setFont(10.0f);
         rootLabel.setJustificationType(juce::Justification::centredLeft);
         addAndMakeVisible(rootLabel);
 
-        filterEditor.setTextToShowWhenEmpty("Filter grooves...", colour(browserMuted).withAlpha(0.72f));
-        if (patterns)
-            filterEditor.setTextToShowWhenEmpty("Filter patterns...", colour(browserMuted).withAlpha(0.72f));
         filterEditor.setTooltip("Filter the cached library by filename or folder path");
-        filterEditor.setColour(juce::TextEditor::backgroundColourId, colour(browserBg));
-        filterEditor.setColour(juce::TextEditor::outlineColourId, colour(browserBorder));
-        filterEditor.setColour(juce::TextEditor::focusedOutlineColourId, colour(browserAccent).withAlpha(0.75f));
-        filterEditor.setColour(juce::TextEditor::textColourId, colour(browserText));
         filterEditor.onTextChange = [this]
         {
             stopTimer();
@@ -284,18 +285,15 @@ public:
         };
         addAndMakeVisible(filterEditor);
 
-        emptyLabel.setColour(juce::Label::textColourId, colour(browserMuted));
         emptyLabel.setFont(11.0f);
         emptyLabel.setJustificationType(juce::Justification::centred);
         addAndMakeVisible(emptyLabel);
 
         tree.setRootItemVisible(false);
         tree.setDefaultOpenness(false);
-        tree.setColour(juce::TreeView::backgroundColourId, colour(browserBg));
-        tree.setColour(juce::TreeView::linesColourId, colour(browserBorder));
-        tree.setColour(juce::TreeView::dragAndDropIndicatorColourId, colour(browserAccent));
         addAndMakeVisible(tree);
 
+        applyTheme();
         refresh();
     }
 
@@ -305,20 +303,40 @@ public:
         tree.setRootItem(nullptr);
     }
 
+    void applyTheme()
+    {
+        rootLabel.setColour(juce::Label::textColourId, colour(browserMuted));
+        emptyLabel.setColour(juce::Label::textColourId, colour(browserMuted));
+        filterEditor.setTextToShowWhenEmpty(patterns ? "Filter patterns..." : "Filter grooves...",
+                                            colour(browserMuted).withAlpha(0.72f));
+        filterEditor.setColour(juce::TextEditor::backgroundColourId, colour(browserBg));
+        filterEditor.setColour(juce::TextEditor::outlineColourId, colour(browserBorder));
+        filterEditor.setColour(juce::TextEditor::focusedOutlineColourId,
+                               colour(browserAccent).withAlpha(0.85f));
+        filterEditor.setColour(juce::TextEditor::textColourId, colour(browserText));
+        tree.setColour(juce::TreeView::backgroundColourId, colour(browserBg));
+        tree.setColour(juce::TreeView::linesColourId, colour(browserBorder).withAlpha(0.62f));
+        tree.setColour(juce::TreeView::dragAndDropIndicatorColourId, colour(browserAccent));
+        repaint();
+        tree.repaint();
+    }
+
     void paint(juce::Graphics& g) override
     {
         g.fillAll(colour(browserBg));
-        g.setColour(colour(browserBorder));
+        g.setColour(ggdThemeColour(GgdThemeRole::borderStrong).withAlpha(0.52f));
         g.drawRect(getLocalBounds(), 1);
         g.setColour(colour(browserPanel));
         g.fillRect(0, 0, getWidth(), 99);
-        g.setColour(colour(browserBorder));
+        g.setColour(colour(browserBorder).withAlpha(0.90f));
         g.drawHorizontalLine(98, 0.0f, static_cast<float>(getWidth()));
+        g.setColour(colour(browserAccent).withAlpha(0.24f));
+        g.fillRect(0, 98, getWidth(), 1);
     }
 
     void resized() override
     {
-        auto bounds = getLocalBounds().reduced(7);
+        auto bounds = getLocalBounds().reduced(8);
         auto buttons = bounds.removeFromTop(29);
         chooseButton.setBounds(buttons.removeFromLeft(64));
         buttons.removeFromLeft(5);
@@ -332,8 +350,8 @@ public:
         bounds.removeFromTop(3);
         rootLabel.setBounds(bounds.removeFromTop(21));
         bounds.removeFromTop(2);
-        filterEditor.setBounds(bounds.removeFromTop(27));
-        bounds.removeFromTop(6);
+        filterEditor.setBounds(bounds.removeFromTop(28));
+        bounds.removeFromTop(7);
         tree.setBounds(bounds);
         emptyLabel.setBounds(bounds.reduced(12));
     }
@@ -563,6 +581,23 @@ void GgdLibraryBrowser::refresh()
 {
     groovePane->refresh();
     patternPane->refresh();
+}
+
+void GgdLibraryBrowser::themeChanged()
+{
+    const int currentTab = tabs.getCurrentTabIndex();
+    groovePane->applyTheme();
+    patternPane->applyTheme();
+
+    // Rebuild just the tab buttons so their explicit background colours follow
+    // the new palette. Pane objects and library indexes remain untouched.
+    tabs.clearTabs();
+    tabs.setColour(juce::TabbedComponent::backgroundColourId, colour(browserBg));
+    tabs.setColour(juce::TabbedComponent::outlineColourId, colour(browserBorder));
+    tabs.addTab("Grooves", colour(browserBg), groovePane.get(), false);
+    tabs.addTab("Patterns", colour(browserBg), patternPane.get(), false);
+    tabs.setCurrentTabIndex(juce::jlimit(0, 1, currentTab), false);
+    repaint();
 }
 
 void GgdLibraryBrowser::setLoadedGroove(const juce::File& file)

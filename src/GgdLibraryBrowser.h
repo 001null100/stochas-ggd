@@ -25,6 +25,7 @@ public:
     juce::File getGrooveRoot() const;
     juce::File getPatternRoot() const;
     void refresh();
+    void themeChanged();
 
 private:
     class BrowserPane;

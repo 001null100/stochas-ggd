@@ -3,14 +3,14 @@
 #include <JuceHeader.h>
 #include <vector>
 #include "GgdKitMap.h"
+#include "GgdEventModel.h"
 
-struct GgdImportedCell
+struct GgdImportedEvent
 {
     int canonicalRow = -1;
-    int step = 0;
+    int tick = 0;
+    int durationTicks = GGD_DEFAULT_EVENT_DURATION_TICKS;
     int velocity = 100;
-    int offset = 0;
-    int retriggerLength = 0;
 };
 
 struct GgdMidiImportResult
@@ -32,7 +32,7 @@ struct GgdMidiImportResult
     int collisions = 0;
     int truncatedNotes = 0;
     juce::Array<int> unresolvedPitches;
-    std::vector<GgdImportedCell> cells;
+    std::vector<GgdImportedEvent> events;
 
     juce::String summary() const;
 };
@@ -44,5 +44,5 @@ public:
         const juce::File& file,
         const GgdKitMap& destinationMap,
         const juce::Array<GgdCanonicalRow>& canonicalRows,
-        int maxSteps);
+        int maxPatternTicks);
 };

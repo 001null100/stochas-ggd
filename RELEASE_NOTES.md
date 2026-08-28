@@ -1,80 +1,61 @@
-# Stochas GGD v0.2.0-beta.1
+# Stochas GGD v0.2.0-beta.2
 
-Beta 1 is the engine transition release. The GGD drum path no longer stores musical hits as inherited Stochas 1/16 cells with offsets and retrigger encodings. Patterns now use an event timeline with exact musical positions, and playback schedules those events directly against the host PPQ timeline.
+Beta 2 repairs the UI regressions introduced by the Beta 1 engine transition. The Beta 1 event engine, persistence, MIDI import and per-pattern geometry remain intact; this release puts the established Alpha 10 editing presentation back on top of that engine.
 
-The visual redesign is deliberately deferred. This release is about replacing the foundation without also moving every piece of furniture.
+## Restored timeline hierarchy
 
-## Event-based pattern engine
+- Bars, beats and subdivisions are visually distinct again instead of being drawn with nearly equal weight.
+- Bar boundaries use the strongest full-height divider and alternating bar shading.
+- Beat boundaries are clearly stronger than subdivision ticks.
+- Primary subdivisions use shorter/lighter markers, with fine subdivisions shown only when the high-resolution grid is active.
+- Beat numbers and stronger drum-family separators are restored.
+- Velocity-dependent hit sizing and selection outlines remain on the event editor.
 
-- Drum patterns now store independent events rather than a fixed cell matrix.
-- Event timing uses a 960 PPQ internal timeline, giving exact integer positions for straight and triplet subdivisions.
-- Events retain velocity, probability, duration and semantic drum-row identity.
-- The event store is fixed-capacity and pointer-free inside the existing SequenceData double-buffer snapshots, so the audio thread still reads immutable state without realtime allocation.
-- The inherited Stochas cell scheduler remains available only as a compatibility fallback for legacy state that has not yet been migrated.
+## Smooth playhead
 
-## Real subdivisions
+- The playhead once again interpolates between the engine's 1/16 position notifications at the editor's 60 Hz refresh rate.
+- Observed step duration is smoothed so movement remains fluid while following tempo changes.
+- The playhead uses an Alpha-style accent line with a subtle timeline glow rather than stepping one cell at a time.
 
-- Native `1/16` grid.
-- Native `1/32` grid. These are now genuinely independent hits rather than half-step offsets packed into a 1/16 cell.
-- Native `1/8T` triplet grid.
-- Native `1/16T` triplet grid.
-- Grid changes affect quantisation/edit placement rather than changing the pattern's underlying storage resolution.
-- Imported off-grid and triplet timing can remain at its exact event tick instead of being flattened into the closest cell plus an offset.
+## Grooves / Patterns browser restored
 
-## Direct event playback
+- The right-side library browser is explicitly assigned its own 310 px editor column again.
+- Its Grooves and Patterns roots, loaded-item state, folder persistence, save/load callbacks and existing browser implementation are unchanged.
+- The browser is explicitly kept visible and above the timeline viewport after resizing so host-restored window sizes cannot silently bury it.
+- The editor minimum size has been raised enough to preserve the browser and top controls instead of allowing them to collapse into each other.
 
-- Beta patterns are scheduled directly from host PPQ positions inside each audio block.
-- Playback no longer needs to wait for inherited sequencer-cell boundaries before deciding which drum events occur.
-- Pattern loops use each pattern's own musical length.
-- Existing MIDI output, note-off queueing, host transport following and CLAP note-effect routing are retained.
+## Zoom-driven grid resolution
 
-## Per-pattern geometry
+The four-way manual grid selector from Beta 1 is removed from the visible workflow. Resolution follows zoom again, while one Triplet toggle selects the rhythmic family.
 
-- Each of the eight internal patterns now owns its own time signature and length.
-- Switching pattern slots restores that pattern's meter and bar count rather than sharing one layer-wide geometry value.
-- A short fill can therefore live beside a multi-bar groove without padding both to the same inherited step count.
+Straight mode:
+- below 350% zoom: `1/16`
+- 350% zoom and above: `1/32`
 
-## MIDI import
+Triplet mode:
+- below 350% zoom: `1/8T`
+- 350% zoom and above: `1/16T`
 
-- GGD Groove Player import now produces event hits at high-resolution musical positions.
-- Multiple hits that previously collided inside one 1/16 cell remain separate events.
-- Triplets and 1/32 timing survive import as actual timing rather than retrigger/offset approximations.
-- Existing semantic translation for P V, P IV and Modern & Massive remains in place.
-- The rare experimental source pitch 85 remains deliberately unresolved rather than being assigned an invented articulation.
+The current zoom and effective grid are shown together. Changing zoom updates drawing, painting, arrow-key nudging and Quantize resolution; existing event positions remain independent of the display grid.
 
-## Native pattern files
+## Engine unchanged from Beta 1
 
-- `.sggdp` pattern files are now version 2.
-- Version 2 stores semantic articulation, exact event tick, duration, velocity and probability together with meter and pattern length.
-- Alpha version 1 `.sggdp` files still load and are translated into event positions.
+Beta 2 intentionally does not modify:
 
-## Project compatibility
+- the 960 PPQ event store
+- direct host-PPQ event scheduling
+- true independent 1/32 and triplet events
+- per-pattern meter and bar count
+- semantic GGD mappings
+- high-resolution MIDI groove import
+- `.sggdp` v2 pattern files
+- Beta project persistence and Alpha migration
 
-- Beta event state is persisted as its own versioned block alongside the inherited Stochas project XML.
-- Existing alpha projects without event state keep their legacy cell data available for one-time migration when opened in Beta.
-- New Beta state round-trips exact event positions and per-pattern geometry instead of recreating the old cell representation.
+## What to verify
 
-## Editor changes kept intentionally small
-
-- The editor now exposes explicit `1/16`, `1/32`, `1/8T` and `1/16T` grid choices.
-- Timing reset is now conceptually Quantize: selected events snap to the active grid rather than resetting a cell-offset field.
-- The existing drum-family layout, semantic kit mapping, pattern browser, selection workflow, velocity editing, undo/redo and library workflow remain the baseline for this release.
-- Broader UX and visual changes are postponed until the event engine has been tested in real Bitwig sessions.
-
-## What to test in Beta 1
-
-This release changes the most timing-sensitive part of the plug-in. The useful tests are therefore behavioral rather than cosmetic:
-
-- Create alternating 1/16 and 1/32 hits and verify that every hit plays distinctly and stays locked over long loops.
-- Create 1/8T and 1/16T patterns and verify that triplets remain phase-locked to Bitwig over repeated looping and transport restarts.
-- Put patterns with different meters and lengths in separate internal slots, switch between them, and verify that each restores and loops at its own geometry.
-- Import GGD grooves containing fast doubles, 1/32 notes or triplets and compare playback against the source MIDI.
-- Save/reopen a Bitwig project and verify exact timing, pattern lengths and active pattern state survive.
-- Open a project created with Alpha 10 and verify its existing patterns migrate without moving or losing hits.
-- Exercise stop/start, Bitwig loop regions and transport jumps to catch duplicate or missed events at block/loop boundaries.
-
-## Known Beta 1 boundaries
-
-- This is the first release on the event engine, so transport edge cases and migration behavior deserve more scrutiny than the established Alpha editor path.
-- The editor still visually inherits much of Alpha 10's workflow and styling; the larger UX pass comes later.
-- MIDI drag-and-drop export into Bitwig is not part of Beta 1 yet. The event model is now suitable for implementing it without lossy reconstruction, which was the prerequisite for doing that feature properly.
+- The Grooves / Patterns browser is visible immediately and retains its configured roots.
+- Bar, beat, 1/16 and high-zoom 1/32 divisions are easy to distinguish at a glance.
+- Triplet mode shows 1/8T normally and switches to 1/16T at 350% zoom.
+- The playhead moves continuously rather than jumping once per 1/16 step.
+- Existing Beta 1 patterns play identically after opening Beta 2.
+- MIDI import, per-pattern lengths/meters, selection editing and project save/reopen behave exactly as they did in Beta 1.

@@ -112,7 +112,7 @@ private:
     double lastRedoMs = -1000.0;
 
     static constexpr int topAreaHeight = 112;
-    static constexpr int bottomAreaHeight = 38;
+    static constexpr int bottomAreaHeight = 72;
     static constexpr int browserWidth = 310;
     static constexpr size_t maxHistoryDepth = 24;
     static constexpr int maxPatternTicks = SEQ_MAX_STEPS * GGD_TICKS_PER_16TH;

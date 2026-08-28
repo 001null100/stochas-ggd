@@ -11,6 +11,13 @@
 #include <deque>
 #include <optional>
 
+// The inherited constants use a separate menu item ID (2) and model value (0)
+// for "MIDI respond: no". The drum editor writes the model directly.
+#ifdef SEQCTL_MIDI_RESPOND_NO
+#undef SEQCTL_MIDI_RESPOND_NO
+#define SEQCTL_MIDI_RESPOND_NO SEQ_MIDI_RESPOND_NO
+#endif
+
 class GgdDrumGrid;
 
 class GgdDrumEditor : public juce::AudioProcessorEditor,

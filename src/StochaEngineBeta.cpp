@@ -1,8 +1,9 @@
+#include "StochaEngine.h"
 #include <algorithm>
 #include <cmath>
 
-// Compile the inherited cell scheduler unchanged as a private fallback. Any
-// pattern with beta event data bypasses it through the dispatch function below.
+// Compile the inherited cell scheduler unchanged as a private fallback. The
+// header is included before aliasing so only the legacy definition is renamed.
 #define processBlock processLegacyBlock
 #include "StochaEngine.cpp"
 #undef processBlock
@@ -75,8 +76,6 @@ bool StochaEngine::processEventBlock(double beatPosition,
         blockStartTick += static_cast<double>(patternLength);
     const double blockEndTick = blockStartTick + numSamplesInBlock * ticksPerSample;
 
-    // A discontinuity means transport seek/loop. Discard note-ons calculated for
-    // the old timeline; existing note-offs remain valid to prevent stuck notes.
     if (mOldEventTickPosition >= 0.0)
     {
         const double discontinuity = std::abs(blockStartTick - mOldEventTickPosition);

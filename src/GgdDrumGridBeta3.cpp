@@ -2,6 +2,11 @@
 
 #include <cmath>
 
+bool GgdDrumGrid::keyPressedLegacy(const juce::KeyPress& key)
+{
+    return keyPressed(key);
+}
+
 int GgdDrumGrid::getSelectedProbability() const
 {
     if (selection.empty())

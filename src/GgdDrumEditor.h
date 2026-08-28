@@ -42,6 +42,8 @@ private:
     int timeSigDenominator = 4;
     int activeBars = 1;
     int gridTicks = GGD_TICKS_PER_16TH;
+    bool tripletMode = false;
+    bool beta2UiInitialised = false;
 
     juce::Label productLabel;
     juce::Label transportStatus;
@@ -50,14 +52,14 @@ private:
     juce::Label meterLabel;
     juce::Label meterSlash;
     juce::Label barsLabel;
-    juce::Label gridLabel;
+    juce::Label gridLabel;       // Beta 1 compatibility; hidden by Beta 2.
     juce::Label zoomLabel;
     juce::Label zoomValueLabel;
     juce::ComboBox kitSelector;
     juce::ComboBox patternSelector;
     juce::ComboBox numeratorSelector;
     juce::ComboBox denominatorSelector;
-    juce::ComboBox gridSelector;
+    juce::ComboBox gridSelector; // Beta 1 compatibility; hidden by Beta 2.
     juce::TextEditor barsEditor;
     juce::TextEditor patternName;
     juce::TextButton drawModeButton { "Draw" };
@@ -66,6 +68,7 @@ private:
     juce::TextButton redoButton { "Redo" };
     juce::TextButton clearButton { "Clear" };
     juce::TextButton importMidiButton { "Import MIDI" };
+    juce::TextButton tripletModeButton { "Triplet" };
     juce::TextButton fitZoomButton { "125%" };
     juce::TextButton selectAllButton { "All" };
     juce::TextButton copyButton { "Copy" };
@@ -112,6 +115,9 @@ private:
     void refreshZoomControls(float scale);
     void setActiveMap(int index);
     void setGridTicks(int ticks);
+    void updateGridResolutionForZoom(float scale);
+    juce::String currentGridText() const;
+    void initialiseBeta2Ui();
 
     GgdPatternSnapshot capturePattern(int pattern) const;
     GgdPatternSnapshot captureCurrentPattern() const;
@@ -147,6 +153,13 @@ private:
     bool parseMeterFromLayerName(const juce::String& layerName,
                                  int& numerator,
                                  int& denominator) const;
+
+    // Beta 2 keeps Beta 1's event-aware editor implementation as a compatibility
+    // base and replaces only the shell/presentation methods below.
+    void paintLegacy(juce::Graphics& g);
+    void resizedLegacy();
+    bool keyPressedLegacy(const juce::KeyPress& key);
+    void timerCallbackLegacy();
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(GgdDrumEditor)
 };

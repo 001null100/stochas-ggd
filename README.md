@@ -1,76 +1,102 @@
-# Stochas 
-[Main web site](https://stochas.org)
+# Stochas GGD
+
+A Windows-first CLAP note-effect drum sequencer for programming GetGood Drums patterns directly in Bitwig Studio.
+
+**Signal chain:**
+
+`Stochas GGD -> Kontakt / GGD -> audio`
+
+Stochas GGD started from the open-source Stochas sequencer engine, but the active drum workflow is now purpose-built around semantic GGD articulations, an event-based timeline, groove/pattern libraries and fast drum editing.
 
 ## Download
-To download pre-built binaries and installations go [here](https://github.com/surge-synthesizer/stochas/releases)
 
-## Platforms and DAWs
-The original product has been tested on Windows and Mac using Reaper, Logic, Cubase, Ableton, FLStudio, Studio One, Cakewalk, ProTools. 
-The open-source version has been so far tested on Windows, Mac and Linux using Reaper, Logic, Bitwig and others, but should have no problem with other targets.
-By default AAX is not built, but if you have the AAX sdk you will be able to enable this.
+Use the **Releases** page in this repository. Each beta release publishes:
 
-## Building
-### Pre-requisites
-- Windows, Linux, Mac OSX based system
-- C++ based developer toolchain such as Clang, VC++, etc.
-- CMake
-- VSCode (optional but recommended, see below)
-- VST2 sdk (only if you need vst2 plugin)
-- AAX (ProTools) SDK (only if you need it. disabled by default)
+- `Stochas.GGD.clap` for direct installation
+- a versioned Windows x64 ZIP containing the same CLAP build
 
-### Building
-- Install developer tool chain on your system. Windows has been tested with MS C++, Mac has been tested with Clang, Linux with GCC on Ubuntu and Buster
-- Install CMake on your system. Go to cmake.org/download
-- If you want to set a particular version add -DSTOCHAS_VERSION=9.9.9 in options below otherwise the version will be 0.9.0 
-- VST2 - if you need it you need to add -DVST2_PATH=path-to-vst2-sdk-here to options below
-- AAX - if you need it you need to install the sdk and edit the CMakefile
-- AU - if you are building the AudioUnit add the option -DSTOCHAS_IS_SYNTH=FALSE
-- Build Stochas:
-  - git submodule update --init --recursive
-  - cmake -B build [options]
-  - cmake --build build --config Release
+The plugin is currently developed and tested primarily as a **CLAP note effect in Bitwig on Windows**.
 
+## What it does
 
-### VSCode
-Development is a lot easier with VSCode using the CMake extension. Simply point vscode at the root directory of the repo. It pretty much detects a cmake project and handles building without any issues.
-- Install C++ extensions for vscode
-- Install CMake Tools extensions for vscode
+- Event-based drum patterns at **960 PPQ** internal resolution.
+- True independent straight and triplet hits rather than 1/16 cells with timing hacks.
+- Automatic editing resolution based on zoom:
+  - straight mode: `1/16` normally, `1/32` at 350%+ zoom
+  - Triplet mode: `1/8T` normally, `1/16T` at 350%+ zoom
+- Per-pattern bar count and time signature across eight internal pattern slots.
+- Smooth interpolated playhead and host transport sync.
+- Live MIDI passthrough so the instrument remains playable through the note effect.
+- Semantic drum rows that are translated through the active GGD kit map.
+- High-resolution GGD MIDI groove import with velocity and performance timing retained.
+- Native `.sggdp` semantic pattern files that remain portable between supported GGD libraries.
+- Grooves and Patterns browser with persistent roots, loaded-item indication and live filtering.
+- Draw and Select tools, marquee selection, copy/paste, move, duplicate, nudge, velocity and timing editing.
+- Ghost, Accent, Humanize, Quantize, Flam and Double performance actions.
+- Per-hit probability editing.
+- High-resolution MIDI export through the active destination kit mapping.
+- Undo/redo for pattern editing.
 
-### XCode
+## Built-in GGD mappings
 
-If you want to use XCode on macintosh, adjust the first cmake command to `cmake -B build -GXcode` and your build directory will contain xcode assets.
+Current built-in mappings cover:
 
-## Projucer
-Prior to JUCE v6, Stochas was managed via Projucer. With the port to v6 and also the release of Stochas as OSS, Projucer is no longer in use. There were some settings in Projucer which had to be adjusted depending on the target. These notes may not be applicable anymore. In particular channel config should be looked at... from juce cmake doc " It is recommended to avoid this option altogether, and to use the newer buses API to specify the desired plugin inputs and outputs." Following are the old notes from
-Projucer days:
+- GetGood Drums **P V**
+- GetGood Drums **P IV**
+- GetGood Drums **Modern & Massive**
 
-### VST and AAX
-- Channel Config - {1, 1}, {2, 2}
-- Plugin is a Synth
-- Plugin Midi Input 
-- Plugin Midi Output
+Patterns are stored semantically. A kick event is a kick articulation, not merely a remembered destination MIDI note. Switching kit maps therefore changes the destination binding without rewriting the musical pattern.
 
-On an additional note for AAX there are linking errors on building in XCode, so the following settings have to be set. 
+## Basic Bitwig setup
 
-- C++ Language - C++11
-- C++ Library - GNU libstdc++
+1. Put `Stochas.GGD.clap` somewhere Bitwig scans for CLAP plugins.
+2. Add Stochas GGD as a **Note FX** device before Kontakt / your GGD instrument.
+3. Choose the matching GGD kit mapping in the plugin.
+4. Draw or import a groove and start playback.
 
-I have read somewhere it’s associated with how Xcode built the SDK at my end, but rather than go fiddling and trying to recompile the SDK in other ways, I just stick to the above settings as they work.
+The plugin outputs MIDI notes to the downstream instrument and passes live controller MIDI through.
 
-### AU 
-- Channel Config - {1, 1}, {2, 2}
-- Plugin Midi input
-- Plugin Midi output
-- Midi Effect Plugin
+## Pattern and groove libraries
 
-# Notes on CI
+The right-side browser has separate roots for:
 
-Unlike the other things at surge-synthesizer land, because of a few
-oddities in AU formatting and flags, a production build of stochas requires
-multiple compile passes. As such, a set of scripts in `scripts/{os}-build.sh`
-assemble the final product on a per-platform basis into a directory
-called `product/` and the actions flow in `.github/workflows` calls 
-out to this, then uses the standard surge upload etc... pattern.
+- **Grooves:** `.mid` / `.midi` files
+- **Patterns:** Stochas GGD `.sggdp` files
 
-If you want to change a production build, you can just run the scripts
-on your local machine to see what they do and to adjust them.
+Folder locations are remembered locally. Double-click a file to load it. The filter field searches filenames and relative folder paths; clearing the filter returns to the normal collapsible folder tree.
+
+## MIDI import and export
+
+MIDI import maps source notes to semantic articulations and then into the current Stochas GGD pattern. Exact event timing and velocity are retained on the 960 PPQ timeline.
+
+MIDI export performs the reverse destination step using the currently selected GGD kit map and writes note timing, velocity and duration at the pattern PPQ resolution.
+
+**Probability is not written to ordinary MIDI files.** Standard MIDI note events do not have a native probability property, so exported MIDI contains every mapped hit. Probability remains part of the native Stochas GGD pattern.
+
+## Current beta boundaries
+
+Stochas GGD is intentionally a sequencer/note effect. It does **not** contain an internal sampler, mixer, effects rack or song arranger; Kontakt/GGD and Bitwig already do those jobs better.
+
+A rare experimental GGD Groove Player source pitch (`85`) remains intentionally unresolved rather than being assigned to an uncertain semantic articulation.
+
+The project is still in beta, so project-state compatibility and editor workflows should be treated as evolving until the first stable release.
+
+## Building on Windows
+
+Clone with submodules, then build the CLAP target:
+
+```powershell
+git submodule update --init --recursive
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DSTOCHAS_VERSION=0.2.0
+cmake --build build --target stochas_CLAP --parallel
+```
+
+The GitHub Actions workflows in `.github/workflows/` build the same Windows CLAP target for pull requests and versioned releases.
+
+## Architecture
+
+See [`docs/architecture.md`](docs/architecture.md) for the product model, semantic mapping strategy, persistence layers and longer-term design direction.
+
+## Upstream
+
+This project is derived from the open-source **Stochas** sequencer. The inherited engine/source remains under its original licensing terms; Stochas GGD adds the GGD-specific event engine, semantic mapping, editor, library and workflow layers used by this fork.

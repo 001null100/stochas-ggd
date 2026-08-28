@@ -89,6 +89,10 @@ private:
     {
         none,
         paint,
+        // The Beta 2 compatibility translation temporarily macro-renames the
+        // token `paint`; keep an enum alias so DragMode::paint references in the
+        // inherited interaction implementation remain valid under that include.
+        paintLegacy = paint,
         velocity,
         timing,
         marquee,

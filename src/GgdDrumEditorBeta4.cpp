@@ -49,6 +49,12 @@ void GgdDrumEditor::initialiseBeta4Ui()
     productLabel.setFont(juce::Font(17.5f, juce::Font::bold));
     productLabel.setTooltip("Stochas GGD  |  Beta 4");
 
+    // Beta 4 prefers a readable layout over technically supporting a width at
+    // which the pattern name and global appearance controls become cramped.
+    setResizeLimits(1400, 640, 2200, 1500);
+    if (getWidth() < 1400)
+        setSize(juce::jmax(1480, getWidth()), juce::jmax(820, getHeight()));
+
     // Keep controls tactile without becoming visually noisy. The custom look
     // and feel handles hover/down/toggle states; these tooltips clarify the few
     // less-obvious performance actions without adding permanent labels.

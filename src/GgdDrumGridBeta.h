@@ -37,15 +37,20 @@ public:
     void resetZoom();
 
     int getSelectedCount() const { return static_cast<int>(selection.size()); }
+    int getSelectedProbability() const;
     void pollFallbackShortcuts(bool active);
 
     void selectAll();
     void copySelectionToClipboard();
     void pasteClipboard();
     void adjustSelectedVelocityBy(int delta);
+    void setSelectedVelocity(int velocity);
+    void setSelectedProbability(int probability);
     void adjustSelectedTimingBy(int deltaTicks);
     void quantizeSelected();
     void humanizeSelected();
+    void createFlamFromSelection();
+    void createDoubleFromSelection();
     void deleteSelected();
 
     bool keyPressed(const juce::KeyPress& key) override;
@@ -209,6 +214,7 @@ private:
     bool moveSelectionBy(int deltaTicks, int deltaRows, bool duplicate);
     bool nudgeSelection(int horizontal, int vertical, bool duplicate);
     void adjustSelectionVelocity(int delta);
+    void duplicateSelectionWithOffset(int deltaTicks, float velocityScale);
     void deleteSelection();
     void beginSelectionMove(const juce::MouseEvent& e, bool duplicate);
     void finishSelectionMove();

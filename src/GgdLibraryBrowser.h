@@ -18,6 +18,9 @@ public:
     void setGrooveOpenCallback(FileCallback callback);
     void setPatternOpenCallback(FileCallback callback);
     void setSavePatternCallback(VoidCallback callback);
+    void setLoadedGroove(const juce::File& file);
+    void setLoadedPattern(const juce::File& file);
+    void clearLoaded();
 
     juce::File getGrooveRoot() const;
     juce::File getPatternRoot() const;

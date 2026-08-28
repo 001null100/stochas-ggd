@@ -28,9 +28,11 @@ class FileTreeItem final : public juce::TreeViewItem
 {
 public:
     using OpenCallback = std::function<void(const juce::File&)>;
+    using LoadedCallback = std::function<bool(const juce::File&)>;
 
-    FileTreeItem(juce::File source, bool patternMode, OpenCallback callback)
-        : file(std::move(source)), patterns(patternMode), onOpen(std::move(callback))
+    FileTreeItem(juce::File source, bool patternMode, OpenCallback callback, LoadedCallback loadedCallback)
+        : file(std::move(source)), patterns(patternMode), onOpen(std::move(callback)),
+          isLoaded(std::move(loadedCallback))
     {
     }
 
@@ -65,21 +67,53 @@ public:
         std::sort(files.begin(), files.end(), sorter);
 
         for (const auto& child : directories)
-            addSubItem(new FileTreeItem(child, patterns, onOpen));
+            addSubItem(new FileTreeItem(child, patterns, onOpen, isLoaded));
         for (const auto& child : files)
-            addSubItem(new FileTreeItem(child, patterns, onOpen));
+            addSubItem(new FileTreeItem(child, patterns, onOpen, isLoaded));
     }
 
     void paintItem(juce::Graphics& g, int width, int height) override
     {
         const bool directory = file.isDirectory();
+        const bool loaded = !directory && isLoaded && isLoaded(file);
+        const bool selected = isSelected();
+
+        if (loaded)
+        {
+            g.setColour(colour(browserAccent).withAlpha(0.25f));
+            g.fillRect(0, 0, width, height);
+            g.setColour(colour(browserAccent));
+            g.fillRect(0, 0, 4, height);
+        }
+        else if (selected)
+        {
+            g.setColour(colour(browserAccent).withAlpha(0.11f));
+            g.fillRect(0, 0, width, height);
+            g.setColour(colour(browserAccent).withAlpha(0.75f));
+            g.drawRect(0, 0, width, height, 1);
+        }
+
         g.setColour(directory ? colour(browserText).withAlpha(0.90f)
                               : colour(browserText));
         g.setFont(juce::Font(directory ? 11.5f : 11.0f,
-                             directory ? juce::Font::bold : juce::Font::plain));
+                             (directory || loaded) ? juce::Font::bold : juce::Font::plain));
+        const int suffixWidth = loaded ? 58 : 6;
         g.drawText(file.getFileNameWithoutExtension(),
-                   4, 0, juce::jmax(0, width - 6), height,
+                   7, 0, juce::jmax(0, width - suffixWidth - 7), height,
                    juce::Justification::centredLeft, true);
+
+        if (loaded)
+        {
+            g.setColour(colour(browserAccent));
+            g.setFont(juce::Font(9.0f, juce::Font::bold));
+            g.drawText("LOADED", juce::jmax(0, width - 55), 0, 50, height,
+                       juce::Justification::centredRight, false);
+        }
+    }
+
+    void itemClicked(const juce::MouseEvent&) override
+    {
+        setSelected(true, true);
     }
 
     void itemDoubleClicked(const juce::MouseEvent&) override
@@ -101,6 +135,7 @@ private:
     bool patterns = false;
     bool populated = false;
     OpenCallback onOpen;
+    LoadedCallback isLoaded;
 };
 }
 
@@ -152,7 +187,7 @@ public:
         addAndMakeVisible(emptyLabel);
 
         tree.setRootItemVisible(false);
-        tree.setDefaultOpenness(true);
+        tree.setDefaultOpenness(false);
         tree.setColour(juce::TreeView::backgroundColourId, colour(browserBg));
         tree.setColour(juce::TreeView::linesColourId, colour(browserBorder));
         tree.setColour(juce::TreeView::dragAndDropIndicatorColourId, colour(browserAccent));
@@ -208,6 +243,12 @@ public:
         onSave = std::move(callback);
     }
 
+    void setLoadedFile(const juce::File& file)
+    {
+        loadedFile = file;
+        tree.repaint();
+    }
+
     juce::File getRoot() const { return root; }
 
     void rebuildTree()
@@ -225,7 +266,11 @@ public:
         if (!valid)
             return;
 
-        treeRoot = std::make_unique<FileTreeItem>(root, patterns, onOpen);
+        auto loaded = [this](const juce::File& candidate)
+        {
+            return loadedFile != juce::File() && candidate == loadedFile;
+        };
+        treeRoot = std::make_unique<FileTreeItem>(root, patterns, onOpen, loaded);
         tree.setRootItem(treeRoot.get());
         treeRoot->setOpen(true);
         tree.repaint();
@@ -236,6 +281,7 @@ private:
     juce::String key;
     bool patterns = false;
     juce::File root;
+    juce::File loadedFile;
     FileCallback onOpen;
     VoidCallback onSave;
 
@@ -330,4 +376,22 @@ void GgdLibraryBrowser::refresh()
 {
     groovePane->rebuildTree();
     patternPane->rebuildTree();
+}
+
+void GgdLibraryBrowser::setLoadedGroove(const juce::File& file)
+{
+    groovePane->setLoadedFile(file);
+    patternPane->setLoadedFile({});
+}
+
+void GgdLibraryBrowser::setLoadedPattern(const juce::File& file)
+{
+    patternPane->setLoadedFile(file);
+    groovePane->setLoadedFile({});
+}
+
+void GgdLibraryBrowser::clearLoaded()
+{
+    groovePane->setLoadedFile({});
+    patternPane->setLoadedFile({});
 }

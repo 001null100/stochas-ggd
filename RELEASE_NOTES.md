@@ -1,50 +1,80 @@
-# Stochas GGD v0.1.0-alpha.10
+# Stochas GGD v0.2.0-beta.1
 
-Alpha.10 is a performance-editing and browser UX pass. It removes several sources of friction found while rapidly auditioning GGD grooves and makes the editor's keyboard and microtiming workflows much more dependable inside Bitwig.
+Beta 1 is the engine transition release. The GGD drum path no longer stores musical hits as inherited Stochas 1/16 cells with offsets and retrigger encodings. Patterns now use an event timeline with exact musical positions, and playback schedules those events directly against the host PPQ timeline.
 
-## Calmer groove and pattern browsing
+The visual redesign is deliberately deferred. This release is about replacing the foundation without also moving every piece of furniture.
 
-- Successful MIDI imports no longer open a modal import report. Retrigger collisions, fallbacks and other import statistics remain available in the non-modal status text/tooltip instead of interrupting every audition.
-- Actual import failures still show a warning dialog.
-- Groove and pattern folders now start collapsed. Only the invisible library root opens automatically, so large GGD libraries no longer explode into one enormous tree.
-- Single-clicked browser items get an obvious selection highlight.
-- The file actually loaded into the current pattern is distinguished separately with a stronger accent, left marker and `LOADED` label.
-- Loading a groove, loading/saving a native pattern, switching internal pattern slots and clearing the current pattern keep that loaded-source marker accurate.
+## Event-based pattern engine
 
-## Reliable single-key editing shortcuts
+- Drum patterns now store independent events rather than a fixed cell matrix.
+- Event timing uses a 960 PPQ internal timeline, giving exact integer positions for straight and triplet subdivisions.
+- Events retain velocity, probability, duration and semantic drum-row identity.
+- The event store is fixed-capacity and pointer-free inside the existing SequenceData double-buffer snapshots, so the audio thread still reads immutable state without realtime allocation.
+- The inherited Stochas cell scheduler remains available only as a compatibility fallback for legacy state that has not yet been migrated.
 
-- Removed dependence on Ctrl/Cmd combinations for core grid commands because Bitwig may consume those before a plug-in receives them.
-- `A` selects all hits in Select mode.
-- `C` copies the current selection.
-- `V` pastes the clipboard, including after switching to another internal pattern slot for cross-pattern copying.
-- `Z` is the reliable plug-in-local Undo shortcut.
-- `Y` is Redo.
-- `D` / `S`, Delete, arrows and Alt+arrows remain on the same edge-triggered physical-key path.
-- Shortcut polling now runs only while the grid explicitly owns keyboard focus. Hovering the plug-in is no longer enough to fire editor commands.
+## Real subdivisions
 
-## Text-entry focus fixes
+- Native `1/16` grid.
+- Native `1/32` grid. These are now genuinely independent hits rather than half-step offsets packed into a 1/16 cell.
+- Native `1/8T` triplet grid.
+- Native `1/16T` triplet grid.
+- Grid changes affect quantisation/edit placement rather than changing the pattern's underlying storage resolution.
+- Imported off-grid and triplet timing can remain at its exact event tick instead of being flattened into the closest cell plus an offset.
 
-- Pattern Name and Length explicitly own keyboard focus while being edited.
-- Host/UI refreshes no longer overwrite either text field while it has focus.
-- Removed the delayed constructor focus grab that could steal focus from a text field shortly after opening the editor.
-- Grid shortcut dispatch is suspended while either text field is active.
+## Direct event playback
 
-## Microtiming editing
+- Beta patterns are scheduled directly from host PPQ positions inside each audio block.
+- Playback no longer needs to wait for inherited sequencer-cell boundaries before deciding which drum events occur.
+- Pattern loops use each pattern's own musical length.
+- Existing MIDI output, note-off queueing, host transport following and CLAP note-effect routing are retained.
 
-- Alt-drag timing now shows an exact signed `-50 ... +50` popup, mirroring the feedback already provided for velocity.
-- The value updates live while dragging and remains briefly visible after release.
-- Alt+double-click a hit to reset its microtiming directly to `0`.
-- Selected hits expose a `Timing 0` action for batch reset.
-- Earlier/Later selection adjustments also show an exact timing value after the change.
+## Per-pattern geometry
 
-## Existing workflow retained
+- Each of the eight internal patterns now owns its own time signature and length.
+- Switching pattern slots restores that pattern's meter and bar count rather than sharing one layer-wide geometry value.
+- A short fill can therefore live beside a multi-bar groove without padding both to the same inherited step count.
 
-- Cross-pattern selection copy/paste preserves velocity, probability, retrigger/length and timing data.
-- Alt-drag and Alt+Arrow duplication remain the fast local duplication tools.
-- Multi-level editor undo/redo, semantic `.sggdp` patterns, exact GGD Groove Player import, collapsible drum families and the 1024-step engine remain intact.
+## MIDI import
 
-## Current limitations
+- GGD Groove Player import now produces event hits at high-resolution musical positions.
+- Multiple hits that previously collided inside one 1/16 cell remain separate events.
+- Triplets and 1/32 timing survive import as actual timing rather than retrigger/offset approximations.
+- Existing semantic translation for P V, P IV and Modern & Massive remains in place.
+- The rare experimental source pitch 85 remains deliberately unresolved rather than being assigned an invented articulation.
 
-- The high-zoom 1/32 editor still projects onto the 1/16 storage model with offset/retrigger data rather than using native independent 1/32 events.
-- Pattern meter and length remain shared layer geometry across the eight inherited Stochas pattern slots.
-- The rare experimental Groove Player source pitch 85 remains deliberately unresolved rather than being assigned an invented articulation.
+## Native pattern files
+
+- `.sggdp` pattern files are now version 2.
+- Version 2 stores semantic articulation, exact event tick, duration, velocity and probability together with meter and pattern length.
+- Alpha version 1 `.sggdp` files still load and are translated into event positions.
+
+## Project compatibility
+
+- Beta event state is persisted as its own versioned block alongside the inherited Stochas project XML.
+- Existing alpha projects without event state keep their legacy cell data available for one-time migration when opened in Beta.
+- New Beta state round-trips exact event positions and per-pattern geometry instead of recreating the old cell representation.
+
+## Editor changes kept intentionally small
+
+- The editor now exposes explicit `1/16`, `1/32`, `1/8T` and `1/16T` grid choices.
+- Timing reset is now conceptually Quantize: selected events snap to the active grid rather than resetting a cell-offset field.
+- The existing drum-family layout, semantic kit mapping, pattern browser, selection workflow, velocity editing, undo/redo and library workflow remain the baseline for this release.
+- Broader UX and visual changes are postponed until the event engine has been tested in real Bitwig sessions.
+
+## What to test in Beta 1
+
+This release changes the most timing-sensitive part of the plug-in. The useful tests are therefore behavioral rather than cosmetic:
+
+- Create alternating 1/16 and 1/32 hits and verify that every hit plays distinctly and stays locked over long loops.
+- Create 1/8T and 1/16T patterns and verify that triplets remain phase-locked to Bitwig over repeated looping and transport restarts.
+- Put patterns with different meters and lengths in separate internal slots, switch between them, and verify that each restores and loops at its own geometry.
+- Import GGD grooves containing fast doubles, 1/32 notes or triplets and compare playback against the source MIDI.
+- Save/reopen a Bitwig project and verify exact timing, pattern lengths and active pattern state survive.
+- Open a project created with Alpha 10 and verify its existing patterns migrate without moving or losing hits.
+- Exercise stop/start, Bitwig loop regions and transport jumps to catch duplicate or missed events at block/loop boundaries.
+
+## Known Beta 1 boundaries
+
+- This is the first release on the event engine, so transport edge cases and migration behavior deserve more scrutiny than the established Alpha editor path.
+- The editor still visually inherits much of Alpha 10's workflow and styling; the larger UX pass comes later.
+- MIDI drag-and-drop export into Bitwig is not part of Beta 1 yet. The event model is now suitable for implementing it without lossy reconstruction, which was the prerequisite for doing that feature properly.

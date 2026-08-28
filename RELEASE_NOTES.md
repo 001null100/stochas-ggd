@@ -1,61 +1,114 @@
-# Stochas GGD v0.2.0-beta.2
+# Stochas GGD v0.2.0-beta.3
 
-Beta 2 repairs the UI regressions introduced by the Beta 1 engine transition. The Beta 1 event engine, persistence, MIDI import and per-pattern geometry remain intact; this release puts the established Alpha 10 editing presentation back on top of that engine.
+Beta 3 is the first feature-focused release on top of the stabilized Beta event engine and restored Beta 2 editor. The scheduler, event store, persistence and import foundation are deliberately left alone; this release concentrates on making drum programming faster and the surrounding workflow less cumbersome.
 
-## Restored timeline hierarchy
+## Per-hit probability editing
 
-- Bars, beats and subdivisions are visually distinct again instead of being drawn with nearly equal weight.
-- Bar boundaries use the strongest full-height divider and alternating bar shading.
-- Beat boundaries are clearly stronger than subdivision ticks.
-- Primary subdivisions use shorter/lighter markers, with fine subdivisions shown only when the high-resolution grid is active.
-- Beat numbers and stronger drum-family separators are restored.
-- Velocity-dependent hit sizing and selection outlines remain on the event editor.
+- Selected hits now expose real event probability through fast `25%`, `50%`, `75%` and `100%` presets.
+- The selection status reports the shared probability when selected hits match, or `Pmix` when the selection contains different values.
+- Probability remains an event property, so it survives native pattern/project persistence and moves with copied or transformed hits.
+- Probability editing participates in the existing pattern undo history through the normal event publication path.
 
-## Smooth playhead
+## Faster velocity workflow
 
-- The playhead once again interpolates between the engine's 1/16 position notifications at the editor's 60 Hz refresh rate.
-- Observed step duration is smoothed so movement remains fluid while following tempo changes.
-- The playhead uses an Alpha-style accent line with a subtle timeline glow rather than stepping one cell at a time.
+Two common drum-performance values now have dedicated actions:
 
-## Grooves / Patterns browser restored
+- **Ghost** sets selected hits to velocity 35.
+- **Accent** sets selected hits to velocity 120.
 
-- The right-side library browser is explicitly assigned its own 310 px editor column again.
-- Its Grooves and Patterns roots, loaded-item state, folder persistence, save/load callbacks and existing browser implementation are unchanged.
-- The browser is explicitly kept visible and above the timeline viewport after resizing so host-restored window sizes cannot silently bury it.
-- The editor minimum size has been raised enough to preserve the browser and top controls instead of allowing them to collapse into each other.
+The existing relative velocity controls, direct velocity dragging and imported velocities remain unchanged.
 
-## Zoom-driven grid resolution
+## Real Flam and Double transforms
 
-The four-way manual grid selector from Beta 1 is removed from the visible workflow. Resolution follows zoom again, while one Triplet toggle selects the rhythmic family.
+The new event timeline is finally being used for drum-aware transforms rather than only storage.
 
-Straight mode:
-- below 350% zoom: `1/16`
-- 350% zoom and above: `1/32`
+- **Flam** creates a quieter grace hit 1/64 before each selected hit.
+- **Double** creates a slightly softer independent 1/32 follow-up hit.
+- Generated hits are ordinary events with their own velocity, probability, duration and editable position.
+- Collisions and transforms outside the pattern boundary are skipped safely.
+- These are not inherited Stochas retrigger flags, so the generated notes can be selected, moved, copied, quantized or deleted independently afterward.
 
-Triplet mode:
-- below 350% zoom: `1/8T`
-- 350% zoom and above: `1/16T`
+## High-resolution MIDI export
 
-The current zoom and effective grid are shown together. Changing zoom updates drawing, painting, arrow-key nudging and Quantize resolution; existing event positions remain independent of the display grid.
+Beta 3 adds `Export MIDI` beside the existing import action.
 
-## Engine unchanged from Beta 1
+- Exports the current pattern using the **active GGD destination kit map**.
+- Resolves semantic articulations to destination MIDI notes only at export time.
+- Preserves the pattern PPQ resolution, exact event timing, velocity, duration and time signature.
+- Unmapped semantic articulations are counted and skipped instead of being assigned guessed MIDI notes.
+- The default filename follows the current pattern name and prefers the configured pattern-library folder when available.
 
-Beta 2 intentionally does not modify:
+Standard MIDI note events have no native probability field. MIDI export therefore writes every mapped hit; probability remains part of Stochas GGD native/project state.
 
-- the 960 PPQ event store
-- direct host-PPQ event scheduling
+## Searchable Grooves / Patterns browser
+
+The right-side browser now has a live filter in both tabs.
+
+- Searches both filenames and relative folder paths.
+- Matching results temporarily flatten into one quick result list for large groove packs.
+- Clearing the filter returns to the normal collapsible folder hierarchy.
+- Loaded-file highlighting remains visible in filtered results.
+- Search results retain the existing double-click load behavior.
+- Each library now maintains a cached file index. The disk is scanned when the root changes or Refresh is pressed, while typing filters the in-memory index instead of recursively walking the folder on every keystroke.
+- Filter output is capped at 500 visible matches to keep the tree responsive on extremely large libraries.
+
+## Editor workflow polish
+
+The selection/action area has been expanded into a two-row performance strip so the new tools do not compress the timeline or browser.
+
+First row:
+- select all / copy / paste
+- relative velocity
+- Ghost / Accent
+- probability presets
+- Delete
+
+Second row:
+- Earlier / Quantize / Later
+- Humanize
+- Flam / Double
+- contextual shortcut hint
+
+The top toolbar now keeps pattern-level operations together, including Import MIDI and Export MIDI.
+
+The editor minimum size remains large enough to preserve the dedicated browser column and usable timeline area.
+
+## Browser and project documentation cleanup
+
+- Replaced the stale upstream Stochas README that still linked to the Surge Stochas releases and described generic AU/AAX/Projucer workflows.
+- The repository README now documents the actual Windows CLAP note-effect workflow, supported GGD maps, event engine, library behavior, MIDI import/export and current beta boundaries.
+- `docs/architecture.md` now reflects the implemented 960 PPQ event model, independent per-pattern geometry, semantic import/export pipeline, browser index, performance transforms and release process.
+
+## Engine intentionally unchanged
+
+Beta 3 does **not** change the parts that proved stable in Beta 1/Beta 2:
+
+- 960 PPQ event storage
+- host-PPQ playback scheduling
 - true independent 1/32 and triplet events
+- smooth interpolated playhead
+- zoom-driven straight/triplet editing resolution
 - per-pattern meter and bar count
-- semantic GGD mappings
-- high-resolution MIDI groove import
+- live MIDI passthrough
+- semantic GGD destination maps
+- high-resolution MIDI import
 - `.sggdp` v2 pattern files
-- Beta project persistence and Alpha migration
+- Beta project persistence / Alpha migration
 
-## What to verify
+The goal is to build upward from the stable foundation rather than reopen it every release.
 
-- The Grooves / Patterns browser is visible immediately and retains its configured roots.
-- Bar, beat, 1/16 and high-zoom 1/32 divisions are easy to distinguish at a glance.
-- Triplet mode shows 1/8T normally and switches to 1/16T at 350% zoom.
-- The playhead moves continuously rather than jumping once per 1/16 step.
-- Existing Beta 1 patterns play identically after opening Beta 2.
-- MIDI import, per-pattern lengths/meters, selection editing and project save/reopen behave exactly as they did in Beta 1.
+## Current boundaries
+
+- Probability has fast presets but no dedicated lane or arbitrary numeric editor yet.
+- Flam uses a musical 1/64 grace offset rather than a millisecond-based flam-time control.
+- Double creates a fixed 1/32 follow-up; more elaborate roll tools are left for later.
+- MIDI export is file-based. Dragging MIDI directly from the plugin into Bitwig is not implemented yet.
+- Experimental GGD Groove Player source pitch 85 remains intentionally unresolved.
+- Browser search is filename/path filtering rather than a tags/favorites database.
+
+## Release-candidate checks
+
+The Beta 3 branch is expected to preserve Beta 2 playback behavior while adding the new editor workflows. The Windows PR build must compile and package successfully before merge, and the final release is complete only when GitHub Releases contains both:
+
+- `Stochas.GGD.clap`
+- `Stochas-GGD-v0.2.0-beta.3-Windows-x64.zip`

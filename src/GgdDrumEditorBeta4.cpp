@@ -102,6 +102,6 @@ void GgdDrumEditor::applyBeta4Theme(GgdThemeId theme, bool persist)
     if (grid)
         grid->repaint();
     if (libraryBrowser)
-        libraryBrowser->repaint();
+        libraryBrowser->themeChanged();
     repaint();
 }

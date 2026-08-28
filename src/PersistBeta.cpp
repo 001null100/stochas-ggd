@@ -1,8 +1,9 @@
+#include "Persist.h"
 #include "GgdEventPersist.h"
 
 // Keep the mature Stochas XML implementation intact and compile it here under
-// private legacy entry points. Beta appends its pointer-free event store as a
-// versioned child of the same project-state XML.
+// private legacy entry points. Persist.h is included first so the preprocessor
+// aliases affect only the inherited definitions, not the class declarations.
 #define store storeLegacy
 #define retrieve retrieveLegacy
 #include "Persist.cpp"

@@ -11,6 +11,13 @@
 #include <deque>
 #include <optional>
 
+// The inherited constants use a separate menu item ID (2) and model value (0)
+// for "MIDI respond: no". The drum editor writes the model directly.
+#ifdef SEQCTL_MIDI_RESPOND_NO
+#undef SEQCTL_MIDI_RESPOND_NO
+#define SEQCTL_MIDI_RESPOND_NO SEQ_MIDI_RESPOND_NO
+#endif
+
 class GgdDrumGrid;
 
 class GgdDrumEditor : public juce::AudioProcessorEditor,
@@ -34,6 +41,7 @@ private:
     int timeSigNumerator = 4;
     int timeSigDenominator = 4;
     int activeBars = 1;
+    int gridTicks = GGD_TICKS_PER_16TH;
 
     juce::Label productLabel;
     juce::Label transportStatus;
@@ -42,12 +50,14 @@ private:
     juce::Label meterLabel;
     juce::Label meterSlash;
     juce::Label barsLabel;
+    juce::Label gridLabel;
     juce::Label zoomLabel;
     juce::Label zoomValueLabel;
     juce::ComboBox kitSelector;
     juce::ComboBox patternSelector;
     juce::ComboBox numeratorSelector;
     juce::ComboBox denominatorSelector;
+    juce::ComboBox gridSelector;
     juce::TextEditor barsEditor;
     juce::TextEditor patternName;
     juce::TextButton drawModeButton { "Draw" };
@@ -63,7 +73,7 @@ private:
     juce::TextButton velocityDownButton { "Vel -" };
     juce::TextButton velocityUpButton { "Vel +" };
     juce::TextButton timingEarlierButton { "Earlier" };
-    juce::TextButton timingResetButton { "Timing 0" };
+    juce::TextButton timingResetButton { "Quantize" };
     juce::TextButton timingLaterButton { "Later" };
     juce::TextButton humanizeButton { "Humanize" };
     juce::TextButton deleteSelectionButton { "Delete" };
@@ -88,17 +98,20 @@ private:
     static constexpr int bottomAreaHeight = 38;
     static constexpr int browserWidth = 310;
     static constexpr size_t maxHistoryDepth = 24;
+    static constexpr int maxPatternTicks = SEQ_MAX_STEPS * GGD_TICKS_PER_16TH;
 
     void timerCallback() override;
     void configureLookAndFeel();
     void initialiseDrumState();
     void applyActiveMapBindings(bool publish);
     void applyPatternGeometry(bool publish = true);
+    void loadGeometryFromCurrentPattern();
     void refreshControlsFromModel();
     void commitBarCountEditor();
     void refreshPatternSelectorLabels();
     void refreshZoomControls(float scale);
     void setActiveMap(int index);
+    void setGridTicks(int ticks);
 
     GgdPatternSnapshot capturePattern(int pattern) const;
     GgdPatternSnapshot captureCurrentPattern() const;

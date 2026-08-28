@@ -1,42 +1,101 @@
 #include "GgdPatternFile.h"
 
 #include <algorithm>
+#include <cmath>
 
 namespace
 {
+int activeStorageRowCount(int canonicalCount)
+{
+    return juce::jlimit(SEQ_MIN_ROWS, SEQ_MAX_ROWS, canonicalCount);
+}
+
 int storageRowForCanonical(int canonicalRow, int canonicalCount)
 {
-    const int rowCount = juce::jlimit(SEQ_MIN_ROWS, SEQ_MAX_ROWS, canonicalCount);
+    const int rowCount = activeStorageRowCount(canonicalCount);
     return (SEQ_MAX_ROWS - rowCount) + canonicalRow;
+}
+
+int canonicalRowForStorage(int storageRow, int canonicalCount)
+{
+    const int first = SEQ_MAX_ROWS - activeStorageRowCount(canonicalCount);
+    const int canonical = storageRow - first;
+    return canonical >= 0 && canonical < canonicalCount ? canonical : -1;
 }
 
 juce::var hitToVar(const GgdPatternHit& hit)
 {
     auto* object = new juce::DynamicObject();
     object->setProperty("semantic", hit.semanticId);
-    object->setProperty("step", hit.step);
+    object->setProperty("tick", hit.tick);
+    object->setProperty("duration", hit.durationTicks);
     object->setProperty("velocity", hit.velocity);
     object->setProperty("probability", hit.probability);
-    object->setProperty("length", hit.retriggerLength);
-    object->setProperty("offset", hit.offset);
     return juce::var(object);
 }
 
-bool varToHit(const juce::var& value, GgdPatternHit& hit)
+bool varToHitV2(const juce::var& value, GgdPatternHit& hit)
 {
     const auto* object = value.getDynamicObject();
     if (object == nullptr)
         return false;
 
     hit.semanticId = object->getProperty("semantic").toString().trim();
-    hit.step = static_cast<int>(object->getProperty("step"));
+    hit.tick = juce::jmax(0, static_cast<int>(object->getProperty("tick")));
+    hit.durationTicks = juce::jlimit(
+        1, 65535, static_cast<int>(object->getProperty("duration")));
     hit.velocity = juce::jlimit(1, 127, static_cast<int>(object->getProperty("velocity")));
     hit.probability = juce::jlimit(0, 100, static_cast<int>(object->getProperty("probability")));
-    hit.retriggerLength = juce::jlimit(-SEQ_MAX_RETRIGGER + 1,
-                                       127,
-                                       static_cast<int>(object->getProperty("length")));
-    hit.offset = juce::jlimit(-50, 50, static_cast<int>(object->getProperty("offset")));
-    return hit.semanticId.isNotEmpty() && hit.step >= 0;
+    return hit.semanticId.isNotEmpty();
+}
+
+void appendLegacyHit(const juce::var& value, std::vector<GgdPatternHit>& output)
+{
+    const auto* object = value.getDynamicObject();
+    if (object == nullptr)
+        return;
+
+    const auto semantic = object->getProperty("semantic").toString().trim();
+    const int step = static_cast<int>(object->getProperty("step"));
+    if (semantic.isEmpty() || step < 0)
+        return;
+
+    const int velocity = juce::jlimit(
+        1, 127, static_cast<int>(object->getProperty("velocity")));
+    const int probability = juce::jlimit(
+        0, 100, static_cast<int>(object->getProperty("probability")));
+    const int length = juce::jlimit(
+        -SEQ_MAX_RETRIGGER + 1, 127, static_cast<int>(object->getProperty("length")));
+    const int offset = juce::jlimit(
+        -50, 50, static_cast<int>(object->getProperty("offset")));
+    const int baseTick = step * GGD_TICKS_PER_16TH;
+
+    if (length < 0)
+    {
+        const int triggers = juce::jmax(2, -length + 1);
+        for (int i = 0; i < triggers; ++i)
+        {
+            GgdPatternHit hit;
+            hit.semanticId = semantic;
+            hit.tick = baseTick + static_cast<int>(std::llround(
+                static_cast<double>(GGD_TICKS_PER_16TH) * i / triggers));
+            hit.durationTicks = juce::jmax(1, GGD_TICKS_PER_16TH / (triggers * 2));
+            hit.velocity = velocity;
+            hit.probability = probability;
+            output.push_back(std::move(hit));
+        }
+        return;
+    }
+
+    GgdPatternHit hit;
+    hit.semanticId = semantic;
+    hit.tick = juce::jmax(0, baseTick + static_cast<int>(std::llround(
+        static_cast<double>(offset) * GGD_TICKS_PER_16TH / 100.0)));
+    hit.durationTicks = juce::jlimit(
+        1, 65535, (length + 1) * GGD_TICKS_PER_16TH);
+    hit.velocity = velocity;
+    hit.probability = probability;
+    output.push_back(std::move(hit));
 }
 }
 
@@ -48,34 +107,49 @@ GgdPatternSnapshot GgdPatternFile::capture(
     int denominator,
     int bars)
 {
+    auto* events = layer.getEventPattern(pattern);
+    if (!events->isActive())
+    {
+        const int fallbackNumerator = numerator > 0 ? numerator : 4;
+        const int fallbackDenominator = denominator > 0 ? denominator : 4;
+        const int fallbackBars = bars > 0 ? bars : 1;
+        layer.migrateLegacyPatternToEvents(
+            pattern, fallbackNumerator, fallbackDenominator, fallbackBars);
+        events = layer.getEventPattern(pattern);
+    }
+
     GgdPatternSnapshot snapshot;
     snapshot.name = layer.getPatternName(pattern);
-    snapshot.numerator = juce::jmax(1, numerator);
-    snapshot.denominator = denominator;
-    snapshot.bars = juce::jmax(1, bars);
+    snapshot.numerator = events->getNumerator();
+    snapshot.denominator = events->getDenominator();
+    snapshot.bars = events->getBars();
+    snapshot.ppq = GGD_EVENT_PPQ;
 
-    const int numSteps = layer.getNumSteps();
-    for (int canonicalRow = 0; canonicalRow < canonicalRows.size(); ++canonicalRow)
+    if (numerator > 0)
+        snapshot.numerator = numerator;
+    if (denominator > 0)
+        snapshot.denominator = denominator;
+    if (bars > 0)
+        snapshot.bars = bars;
+
+    snapshot.hits.reserve(static_cast<size_t>(events->getEventCount()));
+    for (int index = 0; index < events->getEventCount(); ++index)
     {
-        const int storageRow = storageRowForCanonical(canonicalRow, canonicalRows.size());
-        const auto semantic = canonicalRows.getReference(canonicalRow).semanticId;
+        const auto* event = events->getEvent(index);
+        if (event == nullptr)
+            continue;
 
-        for (int step = 0; step < numSteps; ++step)
-        {
-            const int probability = layer.getProb(storageRow, step, pattern);
-            if (probability < 0)
-                continue;
+        const int canonicalRow = canonicalRowForStorage(event->row, canonicalRows.size());
+        if (canonicalRow < 0)
+            continue;
 
-            GgdPatternHit hit;
-            hit.semanticId = semantic;
-            hit.step = step;
-            hit.velocity = juce::jlimit(1, 127,
-                static_cast<int>(layer.getVel(storageRow, step, pattern)));
-            hit.probability = juce::jlimit(0, 100, probability);
-            hit.retriggerLength = layer.getLength(storageRow, step, pattern);
-            hit.offset = layer.getOffset(storageRow, step, pattern);
-            snapshot.hits.push_back(std::move(hit));
-        }
+        GgdPatternHit hit;
+        hit.semanticId = canonicalRows.getReference(canonicalRow).semanticId;
+        hit.tick = event->tick;
+        hit.durationTicks = event->durationTicks;
+        hit.velocity = event->velocity;
+        hit.probability = event->probability;
+        snapshot.hits.push_back(std::move(hit));
     }
 
     return snapshot;
@@ -91,21 +165,22 @@ void GgdPatternFile::restore(
     auto* layer = sequence.getLayer(layerIndex);
     sequence.clearPattern(layerIndex, pattern);
 
+    auto* events = layer->getEventPattern(pattern);
+    events->activate(snapshot.numerator, snapshot.denominator, snapshot.bars);
+    const int lengthTicks = events->getLengthTicks();
+
     for (const auto& hit : snapshot.hits)
     {
         const int canonicalRow = GgdKitMapLibrary::findCanonicalRow(canonicalRows, hit.semanticId);
-        if (canonicalRow < 0 || hit.step < 0 || hit.step >= layer->getNumSteps())
+        if (canonicalRow < 0 || hit.tick < 0 || hit.tick >= lengthTicks)
             continue;
 
         const int storageRow = storageRowForCanonical(canonicalRow, canonicalRows.size());
-        layer->setProb(storageRow, hit.step,
-                       static_cast<int8_t>(juce::jlimit(0, 100, hit.probability)), pattern);
-        layer->setVel(storageRow, hit.step,
-                      static_cast<int8_t>(juce::jlimit(1, 127, hit.velocity)), pattern);
-        layer->setLength(storageRow, hit.step,
-                         static_cast<int8_t>(hit.retriggerLength), pattern);
-        layer->setOffset(storageRow, hit.step,
-                         static_cast<int8_t>(juce::jlimit(-50, 50, hit.offset)), pattern);
+        events->addEvent(storageRow,
+                         hit.tick,
+                         juce::jlimit(1, 127, hit.velocity),
+                         juce::jlimit(0, 100, hit.probability),
+                         juce::jlimit(1, 65535, hit.durationTicks));
     }
 
     const auto name = snapshot.name.substring(0, SEQ_PATTERN_NAME_MAXLEN - 1);
@@ -116,7 +191,8 @@ juce::String GgdPatternFile::serialise(const GgdPatternSnapshot& snapshot)
 {
     auto* root = new juce::DynamicObject();
     root->setProperty("format", "stochas-ggd-pattern");
-    root->setProperty("version", 1);
+    root->setProperty("version", 2);
+    root->setProperty("ppq", GGD_EVENT_PPQ);
     root->setProperty("name", snapshot.name);
     root->setProperty("numerator", snapshot.numerator);
     root->setProperty("denominator", snapshot.denominator);
@@ -182,7 +258,7 @@ bool GgdPatternFile::read(const juce::File& file,
     }
 
     const int version = static_cast<int>(object->getProperty("version"));
-    if (version != 1)
+    if (version != 1 && version != 2)
     {
         error = "Unsupported Stochas GGD pattern version: " + juce::String(version);
         return false;
@@ -193,9 +269,11 @@ bool GgdPatternFile::read(const juce::File& file,
     loaded.numerator = juce::jlimit(1, SEQ_MAX_STEPS_PER_MEASURE,
                                     static_cast<int>(object->getProperty("numerator")));
     loaded.denominator = static_cast<int>(object->getProperty("denominator"));
-    if (loaded.denominator != 4 && loaded.denominator != 8 && loaded.denominator != 16)
+    if (loaded.denominator != 2 && loaded.denominator != 4
+        && loaded.denominator != 8 && loaded.denominator != 16)
         loaded.denominator = 4;
-    loaded.bars = juce::jmax(1, static_cast<int>(object->getProperty("bars")));
+    loaded.bars = juce::jlimit(1, 64, static_cast<int>(object->getProperty("bars")));
+    loaded.ppq = GGD_EVENT_PPQ;
 
     const auto hitValues = object->getProperty("hits");
     if (const auto* array = hitValues.getArray())
@@ -203,11 +281,29 @@ bool GgdPatternFile::read(const juce::File& file,
         loaded.hits.reserve(static_cast<size_t>(array->size()));
         for (const auto& value : *array)
         {
-            GgdPatternHit hit;
-            if (varToHit(value, hit))
-                loaded.hits.push_back(std::move(hit));
+            if (version == 2)
+            {
+                GgdPatternHit hit;
+                if (varToHitV2(value, hit))
+                    loaded.hits.push_back(std::move(hit));
+            }
+            else
+            {
+                appendLegacyHit(value, loaded.hits);
+            }
         }
     }
+
+    const int patternLength = static_cast<int>(
+        static_cast<std::int64_t>(GGD_EVENT_PPQ) * loaded.numerator * 4
+        / loaded.denominator * loaded.bars);
+    loaded.hits.erase(
+        std::remove_if(loaded.hits.begin(), loaded.hits.end(),
+                       [patternLength](const GgdPatternHit& hit)
+                       {
+                           return hit.tick < 0 || hit.tick >= patternLength;
+                       }),
+        loaded.hits.end());
 
     snapshot = std::move(loaded);
     return true;

@@ -79,12 +79,7 @@ DestinationKit destinationKitFor(const GgdKitMap& map)
 bool isSupportedMeter(int numerator, int denominator)
 {
     return numerator >= 1 && numerator <= 32
-        && (denominator == 4 || denominator == 8 || denominator == 16);
-}
-
-int stepsPerBar(int numerator, int denominator)
-{
-    return juce::jmax(1, numerator * 16 / denominator);
+        && (denominator == 2 || denominator == 4 || denominator == 8 || denominator == 16);
 }
 
 PitchTranslation translatePv(int source)
@@ -115,14 +110,10 @@ PitchTranslation translatePv(int source)
         case 64: return { 73, false };
         case 70: return { 47, false };
         case 74: return { 56, false };
-
-        // Extremely rare Groove Player pitches. These meanings were decoded
-        // against Modern & Massive, then intentionally reduced to the closest
-        // articulation available in P V.
-        case 25: return { 45, true }; // Hat Open0 -> Open1
-        case 39: return { 26, true }; // Snare ruff -> Snare hit
-        case 59: return { 62, true }; // Ride crash -> Ride bow
-        case 95: return { 55, true }; // Right crash choke
+        case 25: return { 45, true };
+        case 39: return { 26, true };
+        case 59: return { 62, true };
+        case 95: return { 55, true };
         default: return {};
     }
 }
@@ -155,11 +146,10 @@ PitchTranslation translatePiv(int source)
         case 64: return { 73, false };
         case 70: return { 47, false };
         case 74: return { 65, false };
-
-        case 25: return { 45, true }; // Hat Open0 -> Open1
-        case 39: return { 28, true }; // Snare ruff
-        case 59: return { 62, true }; // Ride crash -> Ride bow
-        case 95: return { 55, true }; // Right crash choke
+        case 25: return { 45, true };
+        case 39: return { 28, true };
+        case 59: return { 62, true };
+        case 95: return { 55, true };
         default: return {};
     }
 }
@@ -202,9 +192,6 @@ PitchTranslation translateModernMassive(int source)
 
 PitchTranslation translatePitch(DestinationKit kit, int source)
 {
-    // Source 85 is deliberately not translated. In the GGD remap probe it
-    // produced MIDI note 0 alongside a hat event, which is not a meaningful
-    // destination articulation and is safer to report than to invent.
     if (source == 85)
         return {};
 
@@ -245,8 +232,7 @@ juce::String GgdMidiImportResult::summary() const
     }
 
     if (collisions > 0)
-        text << " | " << collisions << " retrigger collision"
-             << (collisions == 1 ? "" : "s");
+        text << " | " << collisions << " exact collision" << (collisions == 1 ? "" : "s");
 
     if (truncatedNotes > 0)
         text << " | " << truncatedNotes << " truncated";
@@ -258,7 +244,7 @@ GgdMidiImportResult GgdMidiImporter::parseFile(
     const juce::File& file,
     const GgdKitMap& destinationMap,
     const juce::Array<GgdCanonicalRow>& canonicalRows,
-    int maxSteps)
+    int maxPatternTicks)
 {
     GgdMidiImportResult result;
     result.fileName = file.getFileNameWithoutExtension();
@@ -380,30 +366,29 @@ GgdMidiImportResult GgdMidiImporter::parseFile(
             result.error = "This MIDI file changes time signature inside the groove. Meter changes are not supported yet.";
         else
             result.error = "Unsupported time signature: "
-                         + juce::String(result.numerator) + "/" + juce::String(result.denominator)
-                         + ". The editor currently supports denominators 4, 8 and 16 with numerators up to 32.";
+                         + juce::String(result.numerator) + "/" + juce::String(result.denominator) + ".";
         return result;
     }
 
-    const int barSteps = stepsPerBar(result.numerator, result.denominator);
-    if (barSteps > maxSteps)
+    const int ticksPerBar = GGD_EVENT_PPQ * result.numerator * 4 / result.denominator;
+    if (ticksPerBar <= 0 || ticksPerBar > maxPatternTicks)
     {
         result.error = "The selected time signature is wider than the engine capacity.";
         return result;
     }
-    const int maxBars = juce::jmax(1, maxSteps / barSteps);
+
+    const int maxBars = juce::jmax(1, maxPatternTicks / ticksPerBar);
     const double barLengthQuarters = static_cast<double>(result.numerator) * 4.0
                                    / static_cast<double>(result.denominator);
     const double latestQuarter = rawNotes.back().quarter;
     const int requestedBars = juce::jmax(
         1, static_cast<int>(std::floor(latestQuarter / barLengthQuarters)) + 1);
-
     result.bars = juce::jmin(requestedBars, maxBars);
-    const int totalSteps = result.bars * barSteps;
+    const int totalTicks = result.bars * ticksPerBar;
 
     const auto reverse = buildReverseMap(destinationMap);
     std::set<int> unresolved;
-    std::map<std::pair<int, int>, GgdImportedCell> cells;
+    std::map<std::pair<int, int>, GgdImportedEvent> uniqueEvents;
 
     for (const auto& raw : rawNotes)
     {
@@ -431,9 +416,8 @@ GgdMidiImportResult GgdMidiImporter::parseFile(
             continue;
         }
 
-        const double stepPosition = raw.quarter * 4.0;
-        const int step = static_cast<int>(std::floor(stepPosition + 0.5));
-        if (step < 0 || step >= totalSteps)
+        const int tick = static_cast<int>(std::llround(raw.quarter * GGD_EVENT_PPQ));
+        if (tick < 0 || tick >= totalTicks)
         {
             ++result.truncatedNotes;
             continue;
@@ -442,32 +426,20 @@ GgdMidiImportResult GgdMidiImporter::parseFile(
         if (translation.fallback)
             ++result.fallbackNotes;
 
-        const int offset = juce::jlimit(
-            -50, 50,
-            static_cast<int>(std::round(
-                (stepPosition - static_cast<double>(step)) * 100.0)));
-
-        const auto key = std::make_pair(canonicalRow, step);
-        auto found = cells.find(key);
-
-        if (found == cells.end())
+        const auto key = std::make_pair(canonicalRow, tick);
+        auto found = uniqueEvents.find(key);
+        if (found == uniqueEvents.end())
         {
-            GgdImportedCell cell;
-            cell.canonicalRow = canonicalRow;
-            cell.step = step;
-            cell.velocity = raw.velocity;
-            cell.offset = offset;
-            cells.emplace(key, cell);
+            GgdImportedEvent event;
+            event.canonicalRow = canonicalRow;
+            event.tick = tick;
+            event.velocity = raw.velocity;
+            uniqueEvents.emplace(key, event);
         }
         else
         {
             ++result.collisions;
-            auto& cell = found->second;
-            cell.velocity = juce::jmax(cell.velocity, raw.velocity);
-            cell.offset = 0;
-            cell.retriggerLength = cell.retriggerLength >= 0
-                ? -1
-                : juce::jmax(-3, cell.retriggerLength - 1);
+            found->second.velocity = juce::jmax(found->second.velocity, raw.velocity);
         }
 
         ++result.mappedNotes;
@@ -476,9 +448,9 @@ GgdMidiImportResult GgdMidiImporter::parseFile(
     for (int pitch : unresolved)
         result.unresolvedPitches.add(pitch);
 
-    result.cells.reserve(cells.size());
-    for (const auto& pair : cells)
-        result.cells.push_back(pair.second);
+    result.events.reserve(uniqueEvents.size());
+    for (const auto& pair : uniqueEvents)
+        result.events.push_back(pair.second);
 
     if (result.mappedNotes == 0)
     {

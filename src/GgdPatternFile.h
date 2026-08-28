@@ -9,11 +9,10 @@
 struct GgdPatternHit
 {
     juce::String semanticId;
-    int step = 0;
+    int tick = 0;
+    int durationTicks = GGD_DEFAULT_EVENT_DURATION_TICKS;
     int velocity = 100;
     int probability = SEQ_PROB_ON;
-    int retriggerLength = 0;
-    int offset = 0;
 };
 
 struct GgdPatternSnapshot
@@ -22,6 +21,7 @@ struct GgdPatternSnapshot
     int numerator = 4;
     int denominator = 4;
     int bars = 1;
+    int ppq = GGD_EVENT_PPQ;
     std::vector<GgdPatternHit> hits;
 };
 
@@ -33,9 +33,9 @@ public:
     static GgdPatternSnapshot capture(SequenceLayer& layer,
                                       const juce::Array<GgdCanonicalRow>& canonicalRows,
                                       int pattern,
-                                      int numerator,
-                                      int denominator,
-                                      int bars);
+                                      int numerator = 0,
+                                      int denominator = 0,
+                                      int bars = 0);
 
     static void restore(const GgdPatternSnapshot& snapshot,
                         SequenceData& sequence,

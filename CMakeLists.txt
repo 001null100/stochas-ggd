@@ -8,7 +8,6 @@
 #
 cmake_minimum_required(VERSION 3.16)
 
-# always statically link c runtime on windows
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
@@ -42,8 +41,6 @@ endif()
 set(STOCHAS_CATEGORY "Effect")
 add_subdirectory(lib/JUCE)
 
-# Keep the JSON files under maps/ggd authoritative while making them available
-# inside the plugin binary. This avoids relying on external map files at runtime.
 file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/geninclude")
 file(READ "${CMAKE_CURRENT_SOURCE_DIR}/maps/ggd/p-v.json" GGD_MAP_PV_JSON)
 file(READ "${CMAKE_CURRENT_SOURCE_DIR}/maps/ggd/p-iv.json" GGD_MAP_PIV_JSON)
@@ -97,23 +94,27 @@ include_directories(src)
 target_include_directories(stochas PRIVATE "${CMAKE_BINARY_DIR}/geninclude")
 juce_generate_juce_header(stochas)
 
-# The old Stochas editor panels are deliberately not compiled. We keep the
-# proven scheduler, MIDI engine, state/persistence, automation and randomisation
-# core, and put the new drum editor directly on top of it.
+# Beta 1 keeps the inherited processor and legacy scheduler/persistence as
+# compatibility fallbacks, but event patterns, their scheduler and their editor
+# are now the active drum implementation.
 target_sources(stochas PRIVATE
     src/EditorState.cpp
-    src/GgdDrumEditorAlpha10.cpp
+    src/GgdDrumEditorBeta1.cpp
+    src/GgdDrumGridBeta.cpp
+    src/GgdEventModel.cpp
+    src/GgdSequenceEvents.cpp
+    src/GgdEventPersist.cpp
     src/GgdMidiImporter.cpp
     src/GgdPatternFile.cpp
     src/GgdLibraryBrowser.cpp
     src/GgdKitMap.cpp
     src/pcg_basic.c
-    src/Persist.cpp
+    src/PersistBeta.cpp
     src/PluginProcessor.cpp
     src/Scale.cpp
     src/SeqRandom.cpp
     src/SequenceData.cpp
-    src/StochaEngine.cpp
+    src/StochaEngineBeta.cpp
     ${CMAKE_BINARY_DIR}/geninclude/version.cpp
 )
 

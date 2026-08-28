@@ -57,11 +57,13 @@ private:
     juce::TextButton clearButton { "Clear" };
     juce::TextButton importMidiButton { "Import MIDI" };
     juce::TextButton fitZoomButton { "125%" };
+    juce::TextButton selectAllButton { "All" };
     juce::TextButton copyButton { "Copy" };
     juce::TextButton pasteButton { "Paste" };
     juce::TextButton velocityDownButton { "Vel -" };
     juce::TextButton velocityUpButton { "Vel +" };
     juce::TextButton timingEarlierButton { "Earlier" };
+    juce::TextButton timingResetButton { "Timing 0" };
     juce::TextButton timingLaterButton { "Later" };
     juce::TextButton humanizeButton { "Humanize" };
     juce::TextButton deleteSelectionButton { "Delete" };
@@ -111,7 +113,7 @@ private:
 
     void chooseMidiFile();
     void importMidiFile(const juce::File& file);
-    void applyMidiImport(const GgdMidiImportResult& result);
+    void applyMidiImport(const GgdMidiImportResult& result, const juce::File& sourceFile);
     void requestLoadGroove(const juce::File& file);
     void requestLoadPattern(const juce::File& file);
     void applyPatternFile(const juce::File& file, const GgdPatternSnapshot& snapshot);

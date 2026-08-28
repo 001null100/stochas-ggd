@@ -12,6 +12,7 @@ constexpr juce::uint32 browserBorder = 0xff2d363f;
 constexpr juce::uint32 browserText = 0xffedf2f5;
 constexpr juce::uint32 browserMuted = 0xff8d99a5;
 constexpr juce::uint32 browserAccent = 0xff70d6c1;
+constexpr int maxFilterResults = 500;
 
 juce::Colour colour(juce::uint32 value) { return juce::Colour(value); }
 
@@ -23,6 +24,12 @@ bool matchesFile(const juce::File& file, bool patterns)
         return file.hasFileExtension(GgdPatternFile::extension);
     return file.hasFileExtension("mid;midi");
 }
+
+class FlatRootItem final : public juce::TreeViewItem
+{
+public:
+    bool mightContainSubItems() override { return true; }
+};
 
 class FileTreeItem final : public juce::TreeViewItem
 {
@@ -74,41 +81,7 @@ public:
 
     void paintItem(juce::Graphics& g, int width, int height) override
     {
-        const bool directory = file.isDirectory();
-        const bool loaded = !directory && isLoaded && isLoaded(file);
-        const bool selected = isSelected();
-
-        if (loaded)
-        {
-            g.setColour(colour(browserAccent).withAlpha(0.25f));
-            g.fillRect(0, 0, width, height);
-            g.setColour(colour(browserAccent));
-            g.fillRect(0, 0, 4, height);
-        }
-        else if (selected)
-        {
-            g.setColour(colour(browserAccent).withAlpha(0.11f));
-            g.fillRect(0, 0, width, height);
-            g.setColour(colour(browserAccent).withAlpha(0.75f));
-            g.drawRect(0, 0, width, height, 1);
-        }
-
-        g.setColour(directory ? colour(browserText).withAlpha(0.90f)
-                              : colour(browserText));
-        g.setFont(juce::Font(directory ? 11.5f : 11.0f,
-                             (directory || loaded) ? juce::Font::bold : juce::Font::plain));
-        const int suffixWidth = loaded ? 58 : 6;
-        g.drawText(file.getFileNameWithoutExtension(),
-                   7, 0, juce::jmax(0, width - suffixWidth - 7), height,
-                   juce::Justification::centredLeft, true);
-
-        if (loaded)
-        {
-            g.setColour(colour(browserAccent));
-            g.setFont(juce::Font(9.0f, juce::Font::bold));
-            g.drawText("LOADED", juce::jmax(0, width - 55), 0, 50, height,
-                       juce::Justification::centredRight, false);
-        }
+        paintFileItem(g, width, height, file.getFileNameWithoutExtension(), file.isDirectory());
     }
 
     void itemClicked(const juce::MouseEvent&) override
@@ -136,10 +109,149 @@ private:
     bool populated = false;
     OpenCallback onOpen;
     LoadedCallback isLoaded;
+
+    void paintFileItem(juce::Graphics& g, int width, int height,
+                       const juce::String& displayText, bool directory)
+    {
+        const bool loaded = !directory && isLoaded && isLoaded(file);
+        const bool selected = isSelected();
+
+        if (loaded)
+        {
+            g.setColour(colour(browserAccent).withAlpha(0.25f));
+            g.fillRect(0, 0, width, height);
+            g.setColour(colour(browserAccent));
+            g.fillRect(0, 0, 4, height);
+        }
+        else if (selected)
+        {
+            g.setColour(colour(browserAccent).withAlpha(0.11f));
+            g.fillRect(0, 0, width, height);
+            g.setColour(colour(browserAccent).withAlpha(0.75f));
+            g.drawRect(0, 0, width, height, 1);
+        }
+
+        g.setColour(directory ? colour(browserText).withAlpha(0.90f)
+                              : colour(browserText));
+        g.setFont(juce::Font(directory ? 11.5f : 11.0f,
+                             (directory || loaded) ? juce::Font::bold : juce::Font::plain));
+        const int suffixWidth = loaded ? 58 : 6;
+        g.drawText(displayText,
+                   7, 0, juce::jmax(0, width - suffixWidth - 7), height,
+                   juce::Justification::centredLeft, true);
+
+        if (loaded)
+        {
+            g.setColour(colour(browserAccent));
+            g.setFont(juce::Font(9.0f, juce::Font::bold));
+            g.drawText("LOADED", juce::jmax(0, width - 55), 0, 50, height,
+                       juce::Justification::centredRight, false);
+        }
+    }
 };
+
+class SearchResultItem final : public juce::TreeViewItem
+{
+public:
+    using OpenCallback = std::function<void(const juce::File&)>;
+    using LoadedCallback = std::function<bool(const juce::File&)>;
+
+    SearchResultItem(juce::File source, juce::String relative,
+                     OpenCallback callback, LoadedCallback loadedCallback)
+        : file(std::move(source)), display(std::move(relative)),
+          onOpen(std::move(callback)), isLoaded(std::move(loadedCallback))
+    {
+        display = display.replaceCharacter('\\', '/');
+        display = display.upToLastOccurrenceOf(".", false, false);
+    }
+
+    bool mightContainSubItems() override { return false; }
+
+    void paintItem(juce::Graphics& g, int width, int height) override
+    {
+        const bool loaded = isLoaded && isLoaded(file);
+        if (loaded)
+        {
+            g.setColour(colour(browserAccent).withAlpha(0.25f));
+            g.fillRect(0, 0, width, height);
+            g.setColour(colour(browserAccent));
+            g.fillRect(0, 0, 4, height);
+        }
+        else if (isSelected())
+        {
+            g.setColour(colour(browserAccent).withAlpha(0.11f));
+            g.fillRect(0, 0, width, height);
+            g.setColour(colour(browserAccent).withAlpha(0.75f));
+            g.drawRect(0, 0, width, height, 1);
+        }
+
+        g.setColour(colour(browserText));
+        g.setFont(juce::Font(10.5f, loaded ? juce::Font::bold : juce::Font::plain));
+        g.drawText(display, 7, 0, juce::jmax(0, width - (loaded ? 62 : 8)), height,
+                   juce::Justification::centredLeft, true);
+
+        if (loaded)
+        {
+            g.setColour(colour(browserAccent));
+            g.setFont(juce::Font(9.0f, juce::Font::bold));
+            g.drawText("LOADED", juce::jmax(0, width - 55), 0, 50, height,
+                       juce::Justification::centredRight, false);
+        }
+    }
+
+    void itemClicked(const juce::MouseEvent&) override
+    {
+        setSelected(true, true);
+    }
+
+    void itemDoubleClicked(const juce::MouseEvent&) override
+    {
+        if (onOpen)
+            onOpen(file);
+    }
+
+    int getItemHeight() const override { return 23; }
+
+private:
+    juce::File file;
+    juce::String display;
+    OpenCallback onOpen;
+    LoadedCallback isLoaded;
+};
+
+void collectFilterMatches(const juce::File& root,
+                          const juce::File& directory,
+                          bool patterns,
+                          const juce::String& filter,
+                          std::vector<juce::File>& results)
+{
+    if (results.size() >= static_cast<size_t>(maxFilterResults))
+        return;
+
+    for (const auto& child : directory.findChildFiles(
+             juce::File::findFilesAndDirectories, false, "*"))
+    {
+        if (results.size() >= static_cast<size_t>(maxFilterResults))
+            return;
+
+        if (child.isDirectory())
+        {
+            collectFilterMatches(root, child, patterns, filter, results);
+            continue;
+        }
+
+        if (!matchesFile(child, patterns))
+            continue;
+
+        const auto relative = child.getRelativePathFrom(root);
+        if (relative.containsIgnoreCase(filter))
+            results.push_back(child);
+    }
+}
 }
 
-class GgdLibraryBrowser::BrowserPane final : public juce::Component
+class GgdLibraryBrowser::BrowserPane final : public juce::Component,
+                                             private juce::Timer
 {
 public:
     BrowserPane(juce::PropertiesFile& propertyStore,
@@ -177,13 +289,24 @@ public:
         rootLabel.setJustificationType(juce::Justification::centredLeft);
         addAndMakeVisible(rootLabel);
 
+        filterEditor.setTextToShowWhenEmpty("Filter grooves...", colour(browserMuted).withAlpha(0.72f));
+        if (patterns)
+            filterEditor.setTextToShowWhenEmpty("Filter patterns...", colour(browserMuted).withAlpha(0.72f));
+        filterEditor.setTooltip("Filter by filename or folder path");
+        filterEditor.setColour(juce::TextEditor::backgroundColourId, colour(browserBg));
+        filterEditor.setColour(juce::TextEditor::outlineColourId, colour(browserBorder));
+        filterEditor.setColour(juce::TextEditor::focusedOutlineColourId, colour(browserAccent).withAlpha(0.75f));
+        filterEditor.setColour(juce::TextEditor::textColourId, colour(browserText));
+        filterEditor.onTextChange = [this]
+        {
+            stopTimer();
+            startTimer(180);
+        };
+        addAndMakeVisible(filterEditor);
+
         emptyLabel.setColour(juce::Label::textColourId, colour(browserMuted));
         emptyLabel.setFont(11.0f);
         emptyLabel.setJustificationType(juce::Justification::centred);
-        emptyLabel.setText(patterns
-            ? "Choose a pattern folder to build your library."
-            : "Choose your GGD MIDI groove folder.",
-            juce::dontSendNotification);
         addAndMakeVisible(emptyLabel);
 
         tree.setRootItemVisible(false);
@@ -198,6 +321,7 @@ public:
 
     ~BrowserPane() override
     {
+        stopTimer();
         tree.setRootItem(nullptr);
     }
 
@@ -207,9 +331,9 @@ public:
         g.setColour(colour(browserBorder));
         g.drawRect(getLocalBounds(), 1);
         g.setColour(colour(browserPanel));
-        g.fillRect(0, 0, getWidth(), 69);
+        g.fillRect(0, 0, getWidth(), 99);
         g.setColour(colour(browserBorder));
-        g.drawHorizontalLine(68, 0.0f, static_cast<float>(getWidth()));
+        g.drawHorizontalLine(98, 0.0f, static_cast<float>(getWidth()));
     }
 
     void resized() override
@@ -226,8 +350,10 @@ public:
         }
 
         bounds.removeFromTop(3);
-        rootLabel.setBounds(bounds.removeFromTop(25));
-        bounds.removeFromTop(5);
+        rootLabel.setBounds(bounds.removeFromTop(21));
+        bounds.removeFromTop(2);
+        filterEditor.setBounds(bounds.removeFromTop(27));
+        bounds.removeFromTop(6);
         tree.setBounds(bounds);
         emptyLabel.setBounds(bounds.reduced(12));
     }
@@ -257,20 +383,67 @@ public:
         treeRoot.reset();
 
         const bool valid = root.isDirectory();
-        emptyLabel.setVisible(!valid);
-        tree.setVisible(valid);
-        rootLabel.setText(valid ? root.getFullPathName() : "No folder selected",
-                          juce::dontSendNotification);
-        rootLabel.setTooltip(valid ? root.getFullPathName() : juce::String());
-
         if (!valid)
+        {
+            tree.setVisible(false);
+            emptyLabel.setVisible(true);
+            emptyLabel.setText(patterns
+                ? "Choose a pattern folder to build your library."
+                : "Choose your GGD MIDI groove folder.",
+                juce::dontSendNotification);
+            rootLabel.setText("No folder selected", juce::dontSendNotification);
+            rootLabel.setTooltip({});
             return;
+        }
 
         auto loaded = [this](const juce::File& candidate)
         {
             return loadedFile != juce::File() && candidate == loadedFile;
         };
-        treeRoot = std::make_unique<FileTreeItem>(root, patterns, onOpen, loaded);
+
+        const auto filter = filterEditor.getText().trim();
+        if (filter.isEmpty())
+        {
+            emptyLabel.setVisible(false);
+            tree.setVisible(true);
+            rootLabel.setText(root.getFullPathName(), juce::dontSendNotification);
+            rootLabel.setTooltip(root.getFullPathName());
+            treeRoot = std::make_unique<FileTreeItem>(root, patterns, onOpen, loaded);
+            tree.setRootItem(treeRoot.get());
+            treeRoot->setOpen(true);
+            tree.repaint();
+            return;
+        }
+
+        std::vector<juce::File> results;
+        collectFilterMatches(root, root, patterns, filter, results);
+        std::sort(results.begin(), results.end(), [this](const juce::File& a, const juce::File& b)
+        {
+            return a.getRelativePathFrom(root).compareNatural(
+                b.getRelativePathFrom(root), true) < 0;
+        });
+
+        rootLabel.setText(
+            juce::String(results.size()) + (results.size() == 1 ? " match  |  " : " matches  |  ")
+                + root.getFileName(),
+            juce::dontSendNotification);
+        rootLabel.setTooltip(root.getFullPathName());
+
+        if (results.empty())
+        {
+            tree.setVisible(false);
+            emptyLabel.setVisible(true);
+            emptyLabel.setText("No matches for \"" + filter + "\"", juce::dontSendNotification);
+            return;
+        }
+
+        emptyLabel.setVisible(false);
+        tree.setVisible(true);
+        auto flatRoot = std::make_unique<FlatRootItem>();
+        for (const auto& file : results)
+            flatRoot->addSubItem(new SearchResultItem(
+                file, file.getRelativePathFrom(root), onOpen, loaded));
+        treeRoot = std::move(flatRoot);
         tree.setRootItem(treeRoot.get());
         treeRoot->setOpen(true);
         tree.repaint();
@@ -289,10 +462,17 @@ private:
     juce::TextButton refreshButton;
     juce::TextButton saveButton;
     juce::Label rootLabel;
+    juce::TextEditor filterEditor;
     juce::Label emptyLabel;
     juce::TreeView tree;
-    std::unique_ptr<FileTreeItem> treeRoot;
+    std::unique_ptr<juce::TreeViewItem> treeRoot;
     std::unique_ptr<juce::FileChooser> chooser;
+
+    void timerCallback() override
+    {
+        stopTimer();
+        rebuildTree();
+    }
 
     void chooseRoot()
     {

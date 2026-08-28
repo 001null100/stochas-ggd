@@ -6,9 +6,11 @@
 // methods Beta 2 restores to the Alpha 10 behavior.
 #define paint paintLegacy
 #define resized resizedLegacy
+#define keyPressed keyPressedLegacy
 #define timerCallback timerCallbackLegacy
 #include "GgdDrumEditorBeta1.cpp"
 #undef timerCallback
+#undef keyPressed
 #undef resized
 #undef paint
 

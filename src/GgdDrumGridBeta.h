@@ -120,6 +120,9 @@ private:
     int snapTicks = GGD_TICKS_PER_16TH;
     float zoomScale = 1.25f;
     int playStepPosition = -1;
+    double playStepStartMs = 0.0;
+    double playStepMs = 125.0;
+    bool hasPlayStepEstimate = false;
 
     int hoverCanonicalRow = -1;
     int hoverTick = -1;
@@ -209,4 +212,11 @@ private:
     float snapZoom(float scale) const;
     void applyZoom(float scale, float anchorContent, float anchorViewport);
     void notifyZoomChanged();
+    float interpolatedPlayTick() const;
+
+    // Beta 2 compiles the Beta 1 implementation as a compatibility base and
+    // replaces only presentation/playhead methods. These declarations are the
+    // renamed legacy definitions used by that translation unit.
+    void setPlayPositionLegacy(int stepPosition);
+    void paintLegacy(juce::Graphics& g);
 };

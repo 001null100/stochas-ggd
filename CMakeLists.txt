@@ -94,13 +94,13 @@ include_directories(src)
 target_include_directories(stochas PRIVATE "${CMAKE_BINARY_DIR}/geninclude")
 juce_generate_juce_header(stochas)
 
-# Beta 1 keeps the inherited processor and legacy scheduler/persistence as
-# compatibility fallbacks, but event patterns, their scheduler and their editor
-# are now the active drum implementation.
+# Beta 2 keeps Beta 1's event engine intact and layers the proven Alpha-style
+# editor presentation back over it. The Beta2 translation units include their
+# Beta1 counterparts internally, so only the Beta2 wrappers are compiled here.
 target_sources(stochas PRIVATE
     src/EditorState.cpp
-    src/GgdDrumEditorBeta1.cpp
-    src/GgdDrumGridBeta.cpp
+    src/GgdDrumEditorBeta2.cpp
+    src/GgdDrumGridBeta2.cpp
     src/GgdEventModel.cpp
     src/GgdSequenceEvents.cpp
     src/GgdEventPersist.cpp

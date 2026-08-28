@@ -6,6 +6,7 @@
 #include "GgdMidiExporter.h"
 #include "GgdPatternFile.h"
 #include "GgdLibraryBrowser.h"
+#include "GgdUiTheme.h"
 
 #include <array>
 #include <cstdint>
@@ -34,7 +35,7 @@ public:
 
 private:
     SeqAudioProcessor& processor;
-    juce::LookAndFeel_V4 lookAndFeel;
+    GgdLookAndFeel lookAndFeel;
 
     juce::Array<GgdKitMap> maps;
     juce::Array<GgdCanonicalRow> canonicalRows;
@@ -46,6 +47,7 @@ private:
     bool tripletMode = false;
     bool beta2UiInitialised = false;
     bool beta3UiInitialised = false;
+    bool beta4UiInitialised = false;
 
     juce::Label productLabel;
     juce::Label transportStatus;
@@ -64,6 +66,7 @@ private:
     juce::ComboBox denominatorSelector;
     juce::ComboBox gridSelector; // Beta 1 compatibility; hidden by Beta 2.
     juce::ComboBox probabilitySelector;
+    juce::ComboBox themeSelector;
     juce::TextEditor barsEditor;
     juce::TextEditor patternName;
     juce::TextButton drawModeButton { "Draw" };
@@ -98,6 +101,7 @@ private:
     juce::Viewport gridViewport;
     std::unique_ptr<GgdDrumGrid> grid;
     std::unique_ptr<GgdLibraryBrowser> libraryBrowser;
+    std::unique_ptr<juce::PropertiesFile> appearanceSettings;
     std::unique_ptr<juce::FileChooser> midiFileChooser;
     std::unique_ptr<juce::FileChooser> midiExportChooser;
     std::unique_ptr<juce::FileChooser> patternSaveChooser;
@@ -133,6 +137,8 @@ private:
     juce::String currentGridText() const;
     void initialiseBeta2Ui();
     void initialiseBeta3Ui();
+    void initialiseBeta4Ui();
+    void applyBeta4Theme(GgdThemeId theme, bool persist);
     void updateSelectionPropertyControls();
 
     GgdPatternSnapshot capturePattern(int pattern) const;

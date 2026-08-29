@@ -2,7 +2,7 @@
 
 #include "GgdDrumGridBeta7.h"
 
-class GgdDrumGridV1 final : public GgdDrumGridBeta7
+class GgdDrumGridV1 : public GgdDrumGridBeta7
 {
 public:
     using GgdDrumGridBeta7::GgdDrumGridBeta7;

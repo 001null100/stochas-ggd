@@ -69,7 +69,7 @@ void GgdDrumEditor::initialiseBeta3Ui()
               "Expand velocity differences around the selection's average velocity");
 
     selectAllButton.onClick = [this] { if (grid) grid->selectRowsContainingSelection(); };
-    copyButton.onClick = [this] { if (grid) grid->fillSelectionGaps(); };
+    copyButton.onClick = [this] { if (grid) grid->fillSelectionGapsSelectNew(); };
     pasteButton.onClick = [this] { if (grid) grid->mirrorSelectedTiming(); };
     velocityDownButton.onClick = [this] { if (grid) grid->rampSelectedVelocity(true); };
     velocityUpButton.onClick = [this] { if (grid) grid->rampSelectedVelocity(false); };

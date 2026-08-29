@@ -94,19 +94,20 @@ include_directories(src)
 target_include_directories(stochas PRIVATE "${CMAKE_BINARY_DIR}/geninclude")
 juce_generate_juce_header(stochas)
 
-# The final 1.0 RC layers sit on top of the proven Beta 6/7 presentation and
-# event engine. They tighten host workflow and editor state without reopening
-# the scheduler, persistence format or semantic event model.
+# Final 1.0 keeps the established event scheduler and RC drag/history layers,
+# adding only isolated stabilization, output control and UI playback feedback.
 target_sources(stochas PRIVATE
     src/EditorState.cpp
     src/GgdDrumEditorBeta7Shell.cpp
     src/GgdDrumEditorBeta3.cpp
     src/GgdDrumEditorBeta4.cpp
     src/GgdDrumEditorBeta7.cpp
-    src/GgdDrumEditorV1.cpp
+    src/GgdDrumEditorV1FinalShell.cpp
+    src/GgdDrumEditorFinal.cpp
     src/GgdDrumGridBeta6.cpp
     src/GgdDrumGridBeta7.cpp
     src/GgdDrumGridV1.cpp
+    src/GgdDrumGridFinal.cpp
     src/GgdDrumGridBeta3.cpp
     src/GgdUiTheme.cpp
     src/GgdEventModel.cpp

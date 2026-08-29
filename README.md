@@ -23,9 +23,10 @@ The plugin is developed and tested primarily as a **CLAP note effect in Bitwig o
 - Independent straight and triplet hits.
 - Zoom-aware straight and triplet editing grids.
 - Per-pattern bar count and time signature across eight pattern slots.
-- Smooth interpolated playhead with optional glow and horizontal follow.
-- Follow scrolling only activates when the musical timeline is wider than the visible timeline canvas.
+- Smooth interpolated playhead with optional glow and centre-follow navigation.
+- Follow scrolling only activates when the musical timeline is wider than the visible canvas.
 - Live MIDI passthrough so the downstream GGD instrument remains playable.
+- Project-persistent **SEQ ON / SEQ OFF** for muting generated pattern notes while leaving Bitwig/live MIDI passthrough active.
 - Semantic articulation storage translated through the active GGD kit map.
 - Active-kit row layouts only show articulations that exist in that library, in that library's own order.
 - Click articulation names to audition mapped notes through the downstream instrument.
@@ -37,16 +38,16 @@ The plugin is developed and tested primarily as a **CLAP note effect in Bitwig o
 - Resolution-independent right-click erase.
 - Interpolated paint drag so fast gestures do not skip subdivisions.
 - Shift-drag velocity editing and Alt-drag free timing editing.
-- Multi-note velocity editing shows the current velocity above every affected selected hit.
+- Live velocity/timing value bubbles, including multi-note velocity feedback.
 - Alt-double-click quantize for a single hit.
 - Ghost, Accent, Humanize, Flam and Double actions.
-- Flam, Double and Fill select only the notes they create, which makes immediate follow-up editing predictable.
+- Rows / Fill / Mirror / Ramp+ / Ramp- / Dyn- / Thin / Dyn+ selection transforms.
 - Per-hit probability presets.
 - Undo/redo restores both pattern state and the corresponding selection.
-- Native MIDI drag-out for dropping the current pattern into Bitwig.
+- Native MIDI drag-out for dropping the current pattern directly into Bitwig.
 - File-based MIDI export remains available from the Pattern menu as a fallback.
-- Four persistent UI themes.
-- Modal Settings with click-outside dismissal.
+- Played-note glow, ripple and lane feedback driven by notes the engine actually schedules.
+- Four persistent UI themes and an expanded Settings panel.
 
 ## Built-in GGD mappings
 
@@ -67,7 +68,7 @@ The visible grid belongs to the active kit. P V therefore only displays the inst
 3. Choose the matching GGD kit mapping in Stochas GGD.
 4. Draw or load a groove and start playback.
 
-The plugin outputs mapped MIDI notes to the downstream instrument and passes live controller MIDI through.
+The plugin outputs mapped MIDI notes to the downstream instrument and passes live controller/timeline MIDI through.
 
 ## Editing workflow
 
@@ -79,8 +80,8 @@ In **Select** mode:
 
 - Shift-click toggles a hit in the selection.
 - Shift-drag adjusts velocity.
-- When several hits are selected, they move together while preserving relative velocity differences and each hit displays its live velocity during the gesture.
-- Alt-drag moves timing freely in ticks.
+- When several hits are selected, relative velocity differences are preserved and each affected hit displays its live velocity during the gesture.
+- Alt-drag moves timing freely in ticks and displays signed timing offset.
 - Alt-double-click quantizes one hit to the nearest active subdivision.
 - Undo and redo restore the selection belonging to the historical pattern state.
 
@@ -88,12 +89,12 @@ In **Select** mode:
 
 The context strip focuses on operations that are awkward to reproduce manually:
 
-- **Rows** - select all hits on the instrument rows represented by the current selection.
-- **Fill** - fill missing current-grid subdivisions between selected endpoints. Only the newly created hits become selected.
-- **Mirror** - reflect selected timing around the temporal centre of the selection.
-- **Ramp+ / Ramp-** - create rising or falling velocity contours.
-- **Dyn- / Dyn+** - compress or expand velocity differences around the selection average.
-- **Thin** - remove every second selected event independently on each selected articulation row.
+- **Rows**: select all hits on the instrument rows represented by the current selection.
+- **Fill**: fill missing current-grid subdivisions between selected endpoints.
+- **Mirror**: reflect selected timing around the temporal centre of the selection.
+- **Ramp+ / Ramp-**: create rising or falling velocity contours.
+- **Dyn- / Dyn+**: compress or expand velocity differences around the selection average.
+- **Thin**: remove every second selected event independently on each selected articulation row.
 
 Copy/paste is the phrase repetition workflow: `C` copies the current selection and `V` pastes after it. The pasted copy becomes the new selection so repeated `V` presses chain naturally.
 
@@ -103,31 +104,55 @@ With playhead following enabled, only horizontal timeline scrolling follows play
 
 If the complete musical timeline already fits inside the visible timeline canvas, following is disabled because there is nothing useful to scroll. Once the timeline exceeds the viewport, playback is kept around the visible timeline centre, with the normal left-edge constraint at the start of the pattern.
 
-Smooth mode reconstructs visual movement between coarse host position notifications at a higher UI update cadence. This only affects presentation. The audio/event scheduler is unchanged.
+Smooth mode reconstructs visual movement between coarse host position notifications at a higher UI update cadence. This only affects presentation.
 
 ## MIDI import, drag-out and export
 
 MIDI import maps source notes to semantic articulations and retains event timing and velocity on the 960 PPQ timeline.
 
-The permanent top-bar MIDI action is **Drag MIDI**. Begin dragging from it and Stochas GGD generates a temporary high-resolution `.mid` file using the active GGD destination map, then starts a native Windows file drag intended for direct drop into Bitwig.
+The permanent top-bar MIDI action is **Drag MIDI**. Begin dragging from it and Stochas GGD generates a temporary high-resolution `.mid` file using the active GGD destination map, then starts a native Windows file drag. This workflow is confirmed working for dropping patterns into Bitwig.
+
+Once a dragged clip is placed on the Bitwig timeline, use **SEQ OFF** to prevent the internal pattern from doubling the timeline clip. Incoming/timeline MIDI continues to pass through to the downstream drum instrument.
 
 A conventional **Export MIDI file...** command remains under the Pattern menu as a fallback.
 
 **Probability is not written to ordinary MIDI files.** Standard MIDI note events have no native probability property, so exported or dragged MIDI contains every mapped hit. Probability remains part of the native Stochas GGD pattern.
 
+## Played-note feedback
+
+Playback effects are driven by compact notifications from events that were actually scheduled by the sequencer. Probability-skipped and muted hits therefore do not flash falsely.
+
+Available effects include:
+
+- played-hit glow
+- expanding ripple
+- articulation-lane flash
+- velocity-reactive intensity
+- configurable strength and decay
+- Reduce Motion
+
+The notification path is bounded and lock-free. Animation remains on the UI thread and cannot block MIDI scheduling.
+
 ## Settings
 
-The compact `...` button opens an in-plugin Settings modal. Preferences are local workstation settings and do not modify project/pattern data.
+The compact `...` button opens the in-plugin Settings panel. Editor preferences are local workstation settings and do not modify pattern data.
 
 Available options include:
 
 - Theme: Graphite, Midnight, Ember or Contrast.
-- Follow playhead while playing.
+- Centre-follow playhead navigation.
 - Smooth playhead interpolation.
 - Playhead forward glow.
 - Automatically use a finer grid at high zoom.
 - Shift-hover velocity inspection.
 - Articulation-name audition.
+- Played-hit feedback enable/disable.
+- Hit ripple.
+- Lane flash.
+- Velocity-reactive effect intensity.
+- Effect strength.
+- Effect decay.
+- Reduce Motion.
 
 Settings apply live and can be closed with **Done**, **Escape**, or by clicking outside the panel.
 
@@ -140,11 +165,9 @@ The right-side browser has separate roots for:
 
 Folder locations are remembered locally. Double-click a file to load it. The filter searches filenames and relative paths.
 
-## Current release-candidate boundary
+## Release status
 
-`v1.0.0-rc.1` is the first 1.0 release candidate. The core scheduler, 960 PPQ event model, semantic persistence and playback engine are intentionally unchanged from the stabilized beta series.
-
-The main item requiring real host validation is native MIDI drag-out from the plugin window into Bitwig. CI can validate that the Windows CLAP compiles and that the native JUCE external-file-drag path is present, but it cannot simulate Bitwig accepting the drop target.
+`v1.0.0` is the first full release. Native MIDI drag-out has been validated in Bitwig, and the final stabilization pass adds output muting, played-note feedback, expanded configuration and targeted inherited-state fixes without redesigning the proven host-PPQ scheduling model.
 
 A rare experimental GGD Groove Player source pitch (`85`) remains intentionally unresolved rather than being assigned to an uncertain semantic articulation.
 

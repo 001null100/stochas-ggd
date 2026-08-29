@@ -8,6 +8,8 @@
 #include <utility>
 #include <vector>
 
+class GgdDrumGridFinal;
+
 class GgdDrumGrid : public juce::Component
 {
 public:
@@ -89,6 +91,7 @@ public:
 private:
     friend class GgdDrumGridBeta7;
     friend class GgdDrumGridV1;
+    friend class GgdDrumGridFinal;
 
     struct LayoutItem
     {

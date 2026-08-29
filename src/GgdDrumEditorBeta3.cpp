@@ -38,9 +38,10 @@ void GgdDrumEditor::initialiseBeta3Ui()
     flamButton.onClick = [this] { if (grid) grid->createFlamFromSelection(); };
     doubleButton.onClick = [this] { if (grid) grid->createDoubleFromSelection(); };
 
-    // Beta 7 removes permanent buttons that merely duplicate A/C/V, arrows,
-    // Shift-drag and Alt-drag. Reuse those eight slots for pattern-shaping
-    // operations that are meaningfully faster as one-click transforms.
+    // Copy/Paste already forms a natural chained phrase-repeat workflow: copy
+    // once, paste after the current selection, and each new copy remains
+    // selected for the next V. Keep permanent buttons for transforms that are
+    // genuinely slower to reproduce through direct editing or shortcuts.
     auto transform = [](juce::TextButton& button,
                         const juce::String& text,
                         const juce::String& tooltip)
@@ -52,29 +53,29 @@ void GgdDrumEditor::initialiseBeta3Ui()
 
     transform(selectAllButton, "Rows",
               "Select every hit on the instrument rows represented by the current selection");
-    transform(copyButton, "Repeat",
-              "Repeat the selected phrase immediately after its current span; the new copy stays selected");
+    transform(copyButton, "Fill",
+              "Fill missing current-grid subdivisions between selected endpoints on each row");
     transform(pasteButton, "Mirror",
               "Mirror selected hit timing around the selection's temporal centre");
     transform(velocityDownButton, "Ramp+",
               "Create a rising velocity ramp across the selected hits");
     transform(velocityUpButton, "Ramp-",
               "Create a falling velocity ramp across the selected hits");
-    transform(timingEarlierButton, "Rot <",
-              "Rotate selected timing left by one current subdivision, wrapping inside the selection span");
+    transform(timingEarlierButton, "Dyn-",
+              "Compress velocity differences around the selection's average velocity");
     transform(timingResetButton, "Thin",
               "Remove every second selected hit on each instrument row");
-    transform(timingLaterButton, "Rot >",
-              "Rotate selected timing right by one current subdivision, wrapping inside the selection span");
+    transform(timingLaterButton, "Dyn+",
+              "Expand velocity differences around the selection's average velocity");
 
     selectAllButton.onClick = [this] { if (grid) grid->selectRowsContainingSelection(); };
-    copyButton.onClick = [this] { if (grid) grid->repeatSelection(); };
+    copyButton.onClick = [this] { if (grid) grid->fillSelectionGaps(); };
     pasteButton.onClick = [this] { if (grid) grid->mirrorSelectedTiming(); };
     velocityDownButton.onClick = [this] { if (grid) grid->rampSelectedVelocity(true); };
     velocityUpButton.onClick = [this] { if (grid) grid->rampSelectedVelocity(false); };
-    timingEarlierButton.onClick = [this] { if (grid) grid->rotateSelection(-1); };
+    timingEarlierButton.onClick = [this] { if (grid) grid->scaleSelectedVelocityRange(0.65f); };
     timingResetButton.onClick = [this] { if (grid) grid->thinSelection(); };
-    timingLaterButton.onClick = [this] { if (grid) grid->rotateSelection(1); };
+    timingLaterButton.onClick = [this] { if (grid) grid->scaleSelectedVelocityRange(1.45f); };
 
     probabilityLabel.setVisible(false);
     probabilitySelector.setVisible(false);
@@ -115,8 +116,8 @@ void GgdDrumEditor::updateSelectionPropertyControls()
     doubleButton.setVisible(active);
 
     // updateContextStrip() runs immediately before this function in the editor
-    // timer and still knows these components by their old historic roles. Make
-    // Beta 7's visibility authoritative after that compatibility pass.
+    // timer and still knows these components by their historic roles. Make the
+    // current transform strip authoritative after that compatibility pass.
     selectAllButton.setVisible(active);
     copyButton.setVisible(active);
     pasteButton.setVisible(active);
@@ -138,13 +139,13 @@ void GgdDrumEditor::updateSelectionPropertyControls()
         status += probability >= 0 ? "  P" + juce::String(probability) : "  Pmix";
         selectionStatusLabel.setText(status, juce::dontSendNotification);
         hintLabel.setText(
-            "Shift-drag velocity | Alt-drag timing | Alt-double-click quantize | A/C/V and arrows stay on keyboard",
+            "Shift hover velocity | Shift-drag edit | Alt-drag timing | C copy, V chained paste",
             juce::dontSendNotification);
     }
     else if (selectMode)
     {
         hintLabel.setText(
-            "Shift-click add/remove | A all | C copy | V paste | arrows move | Alt+arrows duplicate",
+            "Shift-click add/remove | Shift-hover velocity | A all | C copy | V paste | arrows move",
             juce::dontSendNotification);
     }
 }

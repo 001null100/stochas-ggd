@@ -142,38 +142,36 @@ bool GgdDrumGridV1::activeMapLayoutNeedsRefresh() const
     if (map == nullptr)
         return false;
 
-    int expectedRows = 0;
-    int expectedHeaders = 0;
+    size_t layoutIndex = 0;
     for (const auto& group : map->groups)
     {
-        ++expectedHeaders;
-        if (collapsedGroups.count(group.id) == 0)
-            expectedRows += group.articulations.size();
-    }
+        if (layoutIndex >= layout.size())
+            return true;
 
-    int actualRows = 0;
-    int actualHeaders = 0;
-    int expectedGroupIndex = 0;
-    for (const auto& item : layout)
-    {
-        if (item.header)
-        {
-            ++actualHeaders;
-            if (expectedGroupIndex >= map->groups.size()
-                || item.groupId != map->groups.getReference(expectedGroupIndex).id)
-                return true;
-            ++expectedGroupIndex;
+        const auto& header = layout[layoutIndex++];
+        if (!header.header || header.groupId != group.id)
+            return true;
+
+        if (collapsedGroups.count(group.id) != 0)
             continue;
-        }
 
-        ++actualRows;
-        if (item.canonicalRow < 0 || item.canonicalRow >= canonicalRows.size())
-            return true;
-        if (map->findArticulation(canonicalRows.getReference(item.canonicalRow).semanticId) == nullptr)
-            return true;
+        for (const auto& articulation : group.articulations)
+        {
+            if (layoutIndex >= layout.size())
+                return true;
+
+            const auto& item = layout[layoutIndex++];
+            if (item.header
+                || item.groupId != group.id
+                || item.canonicalRow < 0
+                || item.canonicalRow >= canonicalRows.size()
+                || canonicalRows.getReference(item.canonicalRow).semanticId
+                    != articulation.semanticId)
+                return true;
+        }
     }
 
-    return actualRows != expectedRows || actualHeaders != expectedHeaders;
+    return layoutIndex != layout.size();
 }
 
 void GgdDrumGridV1::rebuildActiveMapLayout()

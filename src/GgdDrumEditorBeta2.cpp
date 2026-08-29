@@ -47,7 +47,7 @@ void GgdDrumEditor::initialiseBeta2Ui()
     tripletModeButton.setMouseClickGrabsKeyboardFocus(false);
     tripletModeButton.setToggleState(tripletMode, juce::dontSendNotification);
     tripletModeButton.setTooltip(
-        "Triplet grid mode. Normal zoom uses 1/8T; high zoom automatically uses 1/16T.");
+        "Triplet grid mode. Normal zoom uses 1/8T; high zoom can automatically use 1/16T.");
     tripletModeButton.onClick = [this]
     {
         tripletMode = tripletModeButton.getToggleState();
@@ -60,7 +60,7 @@ void GgdDrumEditor::initialiseBeta2Ui()
     zoomSlider.setSkewFactorFromMidPoint(defaultZoomScale);
     zoomSlider.setDoubleClickReturnValue(true, defaultZoomScale);
     zoomSlider.setTooltip(
-        "Timeline zoom. Grid density changes automatically: 1/16 to 1/32, or 1/8T to 1/16T in Triplet mode.");
+        "Timeline zoom. Optional auto fine-grid changes 1/16 to 1/32, or 1/8T to 1/16T, at high zoom.");
 
     if (libraryBrowser)
     {
@@ -77,6 +77,7 @@ void GgdDrumEditor::initialiseBeta2Ui()
     updateGridResolutionForZoom(grid ? grid->getZoomScale() : defaultZoomScale);
     initialiseBeta3Ui();
     initialiseBeta4Ui();
+    initialiseBeta6Ui();
     resized();
 }
 
@@ -96,7 +97,7 @@ juce::String GgdDrumEditor::currentGridText() const
 
 void GgdDrumEditor::updateGridResolutionForZoom(float scale)
 {
-    const bool fine = scale >= detail32ZoomThreshold;
+    const bool fine = autoFineGrid && scale >= detail32ZoomThreshold;
     const int desired = tripletMode
         ? (fine ? GGD_TICKS_PER_16TH_TRIPLET : GGD_TICKS_PER_8TH_TRIPLET)
         : (fine ? GGD_TICKS_PER_32ND : GGD_TICKS_PER_16TH);
@@ -164,9 +165,6 @@ void GgdDrumEditor::resized()
     exportMidiButton.setBounds(first.removeFromLeft(88).reduced(0, 5));
     first.removeFromLeft(gap);
 
-    // Beta 5 moves appearance into a compact settings menu and gives the freed
-    // space to pattern names. The old Import MIDI component is repurposed as
-    // that settings control; groove import remains in the dedicated browser.
     auto settingsArea = first.removeFromRight(34);
     importMidiButton.setBounds(settingsArea.reduced(0, 5));
     first.removeFromRight(gap);
@@ -270,6 +268,11 @@ void GgdDrumEditor::resized()
 
     if (grid)
         grid->refreshSize();
+    if (settingsOverlay)
+    {
+        settingsOverlay->setBounds(getLocalBounds());
+        settingsOverlay->toFront(true);
+    }
 }
 
 bool GgdDrumEditor::keyPressed(const juce::KeyPress& key)
@@ -284,6 +287,7 @@ void GgdDrumEditor::timerCallback()
     initialiseBeta2Ui();
     initialiseBeta3Ui();
     initialiseBeta4Ui();
+    initialiseBeta6Ui();
     if (!grid)
         return;
 
@@ -293,6 +297,7 @@ void GgdDrumEditor::timerCallback()
 
     const int play = processor.mNotifier.getPlayPosition(0);
     grid->setPlayPosition(play);
+    updatePlayheadFollow(play);
 
     if (processor.mNotifier.doesUINeedUpdate())
     {

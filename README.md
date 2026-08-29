@@ -21,18 +21,19 @@ The plugin is currently developed and tested primarily as a **CLAP note effect i
 
 - Event-based drum patterns at **960 PPQ** internal resolution.
 - True independent straight and triplet hits rather than 1/16 cells with timing hacks.
-- Automatic editing resolution based on zoom:
-  - straight mode: `1/16` normally, `1/32` at 350%+ zoom
-  - Triplet mode: `1/8T` normally, `1/16T` at 350%+ zoom
+- Zoom-aware editing resolution:
+  - straight mode: `1/16`, optionally switching to `1/32` at 350%+ zoom
+  - Triplet mode: `1/8T`, optionally switching to `1/16T` at 350%+ zoom
 - Per-pattern bar count and time signature across eight internal pattern slots.
-- Smooth interpolated playhead and host transport sync.
+- Smooth interpolated playhead, optional follow-scrolling and host transport sync.
 - Live MIDI passthrough so the instrument remains playable through the note effect.
-- Semantic drum rows that are translated through the active GGD kit map.
+- Semantic drum rows translated through the active GGD kit map.
 - Click an articulation/instrument name to audition its mapped note through the downstream GGD instrument.
 - High-resolution GGD MIDI groove import with velocity and performance timing retained.
-- Native `.sggdp` semantic pattern files that remain portable between supported GGD libraries.
+- Native `.sggdp` semantic pattern files portable between supported GGD libraries.
 - Grooves and Patterns browser with persistent roots, loaded-item indication and live filtering.
 - Draw and Select tools, marquee selection, copy/paste, move, duplicate, nudge, velocity and timing editing.
+- Cell-centred hit presentation and cell-based Draw-mode targeting.
 - Draw-mode right-click erasing that can target off-grid/triplet hits regardless of the current snap mode.
 - Interpolated paint-drag so fast mouse movement cannot silently jump over intermediate subdivisions.
 - Ghost, Accent, Humanize, Quantize, Flam and Double performance actions.
@@ -41,6 +42,20 @@ The plugin is currently developed and tested primarily as a **CLAP note effect i
 - Pattern names up to 32 visible characters.
 - Undo/redo for pattern editing.
 - Four persistent UI themes with a shared readability-first timing hierarchy.
+- A modal Settings panel for local editor/playhead preferences.
+
+## Settings
+
+The compact `...` button at the right side of the top bar opens an in-plugin modal Settings overlay. These options are local workstation preferences and do not modify project or pattern data:
+
+- **Theme** — Graphite, Midnight, Ember or Contrast.
+- **Follow playhead while playing** — automatically scroll the horizontal timeline as playback moves beyond the visible region.
+- **Smooth playhead interpolation** — use higher-cadence visual interpolation between coarse host position notifications.
+- **Playhead forward glow** — enable the fading directional glow to the right of the cursor.
+- **Follow edge margin** — choose how close the playhead can approach the right edge before following begins.
+- **Automatically use finer grid at high zoom** — toggle the 350% automatic straight/triplet resolution change.
+
+The modal applies changes live, persists them locally, and closes with **Done** or **Escape**.
 
 ## Appearance and timeline hierarchy
 
@@ -49,10 +64,10 @@ The editor treats timing hierarchy as part of the visual model rather than incid
 1. **Bar boundaries**: strongest, full-height dividers.
 2. **Beat boundaries**: full-height but clearly secondary.
 3. **Primary subdivisions**: quieter guides for the active straight or triplet grid.
-4. **Fine subdivisions**: the quietest layer, shown only at high zoom.
+4. **Fine subdivisions**: the quietest layer, only shown when the fine grid is active.
 5. **Instrument-family headers**: dedicated bands and separators distinct from ordinary articulation rows.
 
-The playhead has its own colour instead of reusing the hit accent, and selected hits use a separate high-contrast outline/glow so transport, content and selection remain easy to distinguish.
+The playhead has its own colour, crisp timing edge and optional right-side glow. Selected hits use a separate high-contrast outline/glow so transport, content and selection remain easy to distinguish.
 
 Current themes:
 
@@ -61,7 +76,7 @@ Current themes:
 - **Ember**: warm dark amber.
 - **Contrast**: maximum separation for low-light and accessibility-focused use.
 
-Theme choice is stored locally as an appearance preference and does not alter project or pattern data. Theme selection lives in the compact `...` Settings menu at the right edge of the top bar.
+Theme and playhead/editor preferences are stored locally and do not alter project or pattern data.
 
 ## Built-in GGD mappings
 
@@ -91,15 +106,25 @@ The right-side browser has separate roots for:
 
 Folder locations are remembered locally. Double-click a file to load it. The filter field searches filenames and relative folder paths; clearing the filter returns to the normal collapsible folder tree. The browser follows the active UI theme and keeps loaded and selected rows visually distinct.
 
-The dedicated top-bar Import MIDI button was removed in Beta 5 because the Grooves browser already owns this workflow.
+The dedicated top-bar Import MIDI button was removed because the Grooves browser already owns that workflow.
 
 ## Editing workflow
 
-In **Draw** mode, left-click places a hit on the current grid. Dragging paints every crossed subdivision even when the cursor moves faster than the UI event rate. Right-click is always destructive: click or drag over hits to erase them. Right-click hit-testing follows actual event bodies, so a triplet can be erased while a straight grid is selected and vice versa.
+In **Draw** mode, the visible space between two timing lines is treated as one grid cell. Left-click anywhere inside the cell to place/toggle its hit. The hit graphic is centered inside that space while the stored event timestamp remains on the cell's leading timing boundary.
 
-Hit bodies begin immediately to the right of their timing marker. The marker represents the event start, so the first hit at tick 0 is fully visible rather than being clipped against the left edge.
+Dragging paints every crossed subdivision even when the cursor moves faster than the UI event rate. Right-click is always destructive: click or drag over hits to erase them. Right-click hit-testing follows actual event bodies, so a triplet can be erased while a straight grid is selected and vice versa.
+
+Because centering is presentation-only, the 960 PPQ event timestamp, playback timing, MIDI import/export timing and native pattern persistence are unchanged.
 
 The Bars field selects its complete value when focused, making bar-count replacement a click-and-type operation.
+
+## Playhead and navigation
+
+With **Follow playhead while playing** enabled, only the timeline's horizontal position follows playback. Vertical articulation scrolling stays where you put it.
+
+Once the playhead reaches the configured right-edge margin, the viewport moves continuously so the cursor remains visible rather than page-jumping. Pattern wrap returns the view toward the beginning.
+
+Smooth mode reconstructs display motion between the existing coarse host step notifications and uses a higher visual update cadence. This is a UI interpolation feature only; the audio/event scheduler is unchanged.
 
 ## MIDI import and export
 

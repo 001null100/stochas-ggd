@@ -48,6 +48,17 @@ private:
     bool beta2UiInitialised = false;
     bool beta3UiInitialised = false;
     bool beta4UiInitialised = false;
+    bool beta6UiInitialised = false;
+
+    // Local editor preferences. These belong to the user's workstation rather
+    // than project state and are persisted in the same PropertiesFile as theme.
+    bool followPlayhead = true;
+    bool smoothPlayhead = true;
+    bool playheadGlow = true;
+    bool autoFineGrid = true;
+    int followMarginPercent = 8;
+    int followScrollTargetX = -1;
+    float lastFollowPlayheadX = -1.0f;
 
     juce::Label productLabel;
     juce::Label transportStatus;
@@ -102,6 +113,7 @@ private:
     std::unique_ptr<GgdDrumGrid> grid;
     std::unique_ptr<GgdLibraryBrowser> libraryBrowser;
     std::unique_ptr<juce::PropertiesFile> appearanceSettings;
+    std::unique_ptr<juce::Component> settingsOverlay;
     std::unique_ptr<juce::FileChooser> midiFileChooser;
     std::unique_ptr<juce::FileChooser> midiExportChooser;
     std::unique_ptr<juce::FileChooser> patternSaveChooser;
@@ -138,7 +150,12 @@ private:
     void initialiseBeta2Ui();
     void initialiseBeta3Ui();
     void initialiseBeta4Ui();
+    void initialiseBeta6Ui();
     void applyBeta4Theme(GgdThemeId theme, bool persist);
+    void applyBeta6Preferences(bool persist);
+    void showSettingsDialog();
+    void closeSettingsDialog();
+    void updatePlayheadFollow(int playPosition);
     void updateSelectionPropertyControls();
 
     GgdPatternSnapshot capturePattern(int pattern) const;

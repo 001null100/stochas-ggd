@@ -30,7 +30,7 @@ class StochaEngine {
    };
 
    MidiMappingItem *mMapping[128];
-   bool mMappingIsValid;
+   bool mMappingIsValid = false;
 
    struct MidiOverride {
       bool mOverriden;
@@ -71,6 +71,16 @@ class StochaEngine {
          mCorrespondingNoteOff = nullptr;
       }
    };
+
+   struct PlayedEventNotification {
+      int row = -1;
+      int tick = -1;
+      int velocity = 0;
+   };
+   static constexpr int playedEventQueueSize = 128;
+   juce::AbstractFifo mPlayedEventFifo { playedEventQueueSize };
+   PlayedEventNotification mPlayedEvents[playedEventQueueSize] {};
+   void notifyPlayedEvent(int row, int tick, int velocity);
 
    int mNumActiveNoteOnEvents;
    int mNumActiveNoteOffEvents;
@@ -154,6 +164,11 @@ public:
    void resetMidiControl();
    bool getStepPlayedState(int position, int notenum);
    void setAutomationParameterValue(int paramId, int value);
+
+   // UI-only feedback channel for visualising events that actually made it
+   // through probability/mute decisions and into the generated MIDI queue.
+   bool popPlayedEvent(int *row, int *tick, int *velocity);
+   void clearPlayedEvents();
 };
 
 #endif

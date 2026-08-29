@@ -5,6 +5,7 @@
 
 #include <functional>
 #include <set>
+#include <utility>
 #include <vector>
 
 class GgdDrumGrid : public juce::Component
@@ -34,6 +35,7 @@ public:
     void setPlayPosition(int stepPosition);
     void setPlayheadPresentation(bool smoothing, bool glow);
     float getPlayheadContentX() const;
+    float getTimelineContentWidthPixels() const;
     int getTimelineInsetPixels() const { return nameWidth; }
     float getZoomScale() const { return zoomScale; }
     void setZoomScale(float scale);
@@ -41,7 +43,13 @@ public:
 
     int getSelectedCount() const { return static_cast<int>(selection.size()); }
     int getSelectedProbability() const;
+    std::vector<std::pair<int, int>> getSelectionCoordinates() const;
+    void restoreSelectionCoordinates(const std::vector<std::pair<int, int>>& coordinates);
     void pollFallbackShortcuts(bool active);
+
+    void setUndoRedoCallbacks(std::function<void()> undo, std::function<void()> redo);
+    void setSelectionCallback(std::function<void()> callback);
+    void setInteractionPreferences(bool shiftHoverVelocity, bool auditionArticulations);
 
     void selectAll();
     void copySelectionToClipboard();
@@ -60,6 +68,7 @@ public:
     // these buttons focus on operations that are cumbersome to do manually.
     void selectRowsContainingSelection();
     void fillSelectionGaps();
+    void fillSelectionGapsSelectNew();
     void mirrorSelectedTiming();
     void rampSelectedVelocity(bool rising);
     void scaleSelectedVelocityRange(float factor);
@@ -79,6 +88,7 @@ public:
 
 private:
     friend class GgdDrumGridBeta7;
+    friend class GgdDrumGridV1;
 
     struct LayoutItem
     {
@@ -155,6 +165,8 @@ private:
     bool hasPlayStepEstimate = false;
     bool smoothPlayhead = true;
     bool playheadGlow = true;
+    bool shiftHoverVelocityInspector = true;
+    bool articulationAuditionEnabled = true;
 
     int hoverCanonicalRow = -1;
     int hoverTick = -1;

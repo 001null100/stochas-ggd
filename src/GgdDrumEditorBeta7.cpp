@@ -1,5 +1,5 @@
 #include "GgdDrumEditor.h"
-#include "GgdDrumGridBeta.h"
+#include "GgdDrumGridV1.h"
 
 #include <functional>
 
@@ -215,8 +215,9 @@ void GgdDrumEditor::initialiseBeta6Ui()
             grid->grabKeyboardFocus();
     };
 
-    productLabel.setTooltip("Stochas GGD  |  Beta 8  |  1.0 candidate");
+    productLabel.setTooltip("Stochas GGD  |  1.0 RC1");
     applyBeta6Preferences(false);
+    initialiseV1Ui();
 }
 
 void GgdDrumEditor::showSettingsDialog()
@@ -289,6 +290,8 @@ void GgdDrumEditor::updatePlayheadFollow(int playPosition)
         {
             followBaseGridWidth = -1;
             grid->refreshSize();
+            if (auto* v1 = dynamic_cast<GgdDrumGridV1*>(grid.get()))
+                v1->refreshActiveMapLayout();
         }
         return;
     }
@@ -301,6 +304,27 @@ void GgdDrumEditor::updatePlayheadFollow(int playPosition)
     const int inset = grid->getTimelineInsetPixels();
     const int timelineWidth = juce::jmax(1, viewWidth - inset);
     const int centreOffset = inset + timelineWidth / 2;
+
+    // Following is only useful when there is actually hidden timeline content.
+    // A short pattern that already fits in the canvas should remain completely
+    // stationary rather than being padded just so the playhead can chase centre.
+    if (grid->getTimelineContentWidthPixels() <= static_cast<float>(timelineWidth) + 1.0f)
+    {
+        followScrollTargetX = -1;
+        lastFollowPlayheadX = playX;
+
+        if (followBaseGridWidth >= 0)
+        {
+            followBaseGridWidth = -1;
+            grid->refreshSize();
+            if (auto* v1 = dynamic_cast<GgdDrumGridV1*>(grid.get()))
+                v1->refreshActiveMapLayout();
+        }
+
+        if (gridViewport.getViewPositionX() != 0)
+            gridViewport.setViewPosition(0, gridViewport.getViewPositionY());
+        return;
+    }
 
     if (followBaseGridWidth < 0)
         followBaseGridWidth = grid->getWidth();

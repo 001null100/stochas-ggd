@@ -1,118 +1,117 @@
-# Stochas GGD v0.2.0-beta.8
+# Stochas GGD v1.0.0-rc.1
 
-Beta 8 is intentionally a **1.0 release-candidate cleanup pass** rather than another expansion release. It removes redundant UI actions, fixes the remaining Shift-velocity feedback rough edge, makes instrument-family dividers safer to interact with, and replaces novelty transforms with practical drum-editing tools. The scheduler, stored event timing, MIDI mapping and project persistence remain unchanged.
+This is the final functional release candidate for Stochas GGD 1.0. It focuses on predictable editor state, kit-correct layouts and the last missing Bitwig workflow: dragging the current pattern out as MIDI directly from the plug-in.
 
-## Copy / Paste is the phrase-repeat workflow
+The audio scheduler, 960 PPQ event model, project persistence format and semantic GGD mapping remain unchanged.
 
-The dedicated **Repeat** transform has been removed. It duplicated the existing clipboard behavior.
+## Smarter playhead following
 
-The intended workflow is now simply:
+Centre-follow now activates only when the **musical timeline is wider than the visible timeline canvas**.
 
-1. select a phrase
-2. press `C` once
-3. press `V` to paste immediately after the current selected phrase
-4. the pasted copy becomes the selection, so additional `V` presses naturally walk the phrase forward
+- Short patterns that already fit remain completely stationary while playing.
+- Longer patterns retain centre-locked following.
+- The temporary trailing runway is only added when following is actually necessary.
+- Resizing or zooming until the pattern fits removes that runway and returns the timeline to its natural position.
 
-This keeps repetition on the keyboard instead of spending a permanent context-strip slot on it.
+## Selection now follows the result of an action
 
-## Shift velocity inspection and editing
+Addition actions hand control to the notes they created instead of leaving the source notes mixed into the selection.
 
-The Beta 7 Shift-click path could leave the velocity bubble pinned after merely changing selection. Beta 8 separates **inspection**, **selection** and **editing** more cleanly.
+- **Flam** selects only the new grace hits.
+- **Double** selects only the new follow-up hits.
+- **Fill** selects only the newly inserted subdivisions.
+- Paste continues to select the new copy, preserving the `C`, then repeated `V` phrase-repeat workflow.
 
-- **Hold Shift and hover a hit** to inspect its velocity.
-- **Shift-click** still toggles that hit in the selection.
-- **Shift-drag** still edits velocity; a multi-selection moves together while preserving relative differences.
-- Releasing Shift or leaving the grid clears the hover velocity bubble.
-- Velocity/timing bubbles during active edits remain available exactly where they are useful.
+Transforms that modify existing notes, such as Mirror, Humanize and velocity transforms, keep their transformed result selected.
 
-## Instrument groups only collapse from the articulation panel
+## Undo and redo preserve selection
 
-Instrument-family headers remain full-width visual dividers across the timeline, but the timeline portion is now deliberately inert.
+Pattern history now remembers editor selection alongside pattern content.
 
-A group can only be collapsed or expanded by clicking its header in the sticky **left articulation panel**. This prevents accidental folding when clicking an otherwise useful empty portion of a group divider in the grid.
+Selection state is keyed to the pattern snapshot fingerprint, so undo/redo can restore the notes that were selected at that historical state without changing the existing pattern-history format. Selection callbacks are deliberately ignored during the destructive snapshot restore and reapplied afterward, avoiding the old behavior where undo always returned with nothing selected.
 
-## Context-strip transforms refined
+## Multi-note velocity feedback
 
-The transform strip now focuses on operations that are awkward to reproduce manually:
+Shift-dragging the velocity of multiple selected hits now displays a compact live velocity chip above **each affected hit**. Relative velocity differences are still preserved. The chips remain briefly after release so the final values can be read without permanently cluttering the grid.
 
-### Rows
-Select every event on each instrument row represented by the current selection.
+Single-note velocity and free-timing bubbles remain unchanged.
 
-### Fill
-Fill missing **current-grid subdivisions** between selected endpoints on each row. Existing hits are never moved or quantized. New hits interpolate velocity between the surrounding selected hits, making Fill useful for building rolls, hats and denser variations without flattening the dynamics.
+## Active kit layouts are now exact
 
-### Mirror
-Reflect selected hit timing around the temporal centre of the selection while keeping each hit on its current articulation row.
+The editor no longer displays the union of every articulation used by every bundled GGD library.
 
-### Ramp+ / Ramp-
-Create rising or falling velocity contours across selected hits.
+Each selected kit now builds its visible rows from that kit's own group and articulation order, then resolves those semantic IDs back to the existing canonical storage rows. This means:
 
-### Dyn- / Dyn+
-Compress or expand velocity differences around the selection's average velocity. `Dyn-` tightens an uneven performance; `Dyn+` exaggerates the existing accents and ghosts without replacing them with fixed values.
+- P V only shows articulations that actually exist in P V.
+- P IV keeps its own group/articulation order.
+- Modern & Massive keeps its own group/articulation order.
+- Stored pattern row indices and semantic persistence are unchanged.
+- Collapsed-group state is respected without forcing unnecessary layout rebuilds.
 
-### Thin
-Remove every second selected event independently on each articulation row for quick density reduction.
+## Drag MIDI directly into Bitwig
 
-The previous Rotate actions have been removed.
+The permanent **Export MIDI** button is replaced by **Drag MIDI**.
+
+Dragging that control creates a temporary high-resolution `.mid` file using the active GGD map and starts JUCE's native Windows file drag. The temporary file is cleaned up when the native drag completes.
+
+The intended workflow is simply:
+
+1. program/select the current pattern as usual
+2. drag **Drag MIDI** from Stochas GGD
+3. drop it into Bitwig where a MIDI clip/file is accepted
+
+The previous file-save export remains available under **Pattern > Export MIDI file...** as a fallback.
+
+This RC verifies that the native drag path compiles and packages correctly. Acceptance by Bitwig's drop target must still be validated in the actual host before the identical code is promoted to final 1.0.
+
+## Settings polish
+
+Settings retains Theme, Follow Playhead, Smooth Playhead, Playhead Glow and Auto Fine Grid, and adds:
+
+- **Shift-hover velocity inspector** toggle
+- **Articulation click audition** toggle
+
+The modal can now be closed with **Done**, **Escape**, or by clicking the dimmed area outside the settings panel.
 
 ## Editing workflow retained
 
-Beta 8 keeps the editing fixes from previous betas:
+The RC keeps the stabilized Beta 8 workflow:
 
-- cell-centred hit presentation
-- cell-based Draw targeting
-- unconditional right-click erase in Draw mode
-- resolution-independent erasing across straight and triplet hits
-- paint-drag interpolation across skipped subdivisions
-- Alt-drag free timing
-- Alt-double-click quantize-to-nearest-current-subdivision
-- velocity and timing value bubbles
-- articulation-name audition through the downstream GGD instrument
-- reliable Bars click/select/type behavior
+- cell-centred notes and cell-based Draw targeting
+- right-click erase, including off-grid straight/triplet events
+- interpolated paint drags across dense subdivisions
+- Shift-hover velocity inspection
+- Shift-click multi-selection and Shift-drag velocity editing
+- Alt-drag free timing and Alt-double-click quantize-to-current-subdivision
+- articulation-name audition
+- group collapse only from the sticky left articulation panel
+- reliable Bars text input
 - 32-character pattern names
-- live pattern-slot caption refresh
-
-## Playback and presentation retained
-
-Beta 8 keeps:
-
-- centre-locked playhead following
-- optional 120 Hz playhead interpolation
-- optional forward playhead glow
-- modal Settings
-- Graphite / Midnight / Ember / Contrast themes
-- bar > beat > primary subdivision > fine subdivision hierarchy
-- clear instrument-family divider hierarchy
-- fixed Grooves / Patterns browser
+- chained keyboard copy/paste repetition
+- Rows / Fill / Mirror / Ramp+ / Ramp- / Dyn- / Thin / Dyn+ transforms
+- Ghost / Accent / probability / Humanize / Flam / Double performance actions
+- indexed Grooves / Patterns browser
+- semantic `.sggdp` pattern storage
 
 ## Engine intentionally unchanged
 
-Beta 8 does **not** modify:
+v1.0.0-rc.1 does **not** modify:
 
 - host-PPQ event scheduling
-- 960 PPQ event storage
 - event probability or duration playback
 - transport discontinuity handling
-- MIDI import/export mapping
-- semantic GGD kit maps
+- 960 PPQ event storage
 - project persistence format
-- pattern geometry
+- semantic kit-map storage
 - live MIDI passthrough
 
-That is deliberate. At this stage, the priority is stabilising the interaction surface rather than reopening the engine without a concrete playback bug.
+## Remaining 1.0 gate
 
-## Current boundaries before 1.0
-
-- MIDI export remains file-based; direct MIDI drag-out into Bitwig is still not implemented.
-- Probability uses quick presets rather than a dedicated lane/arbitrary-value editor.
-- Experimental GGD Groove Player source pitch 85 remains intentionally unresolved.
-- Playhead smoothing remains display interpolation reconstructed from the existing host notifier rather than a new audio-thread timing feed.
-
-None of those currently block the core drum-sequencing workflow, so Beta 8 is intended to be tested as the final prerelease candidate before a 1.0 decision.
+The only new behavior that CI cannot validate is the external drop into Bitwig itself. If the `Drag MIDI` control drops a usable MIDI clip/file into Bitwig and this RC exposes no new editor regressions, the code is ready to be promoted to `v1.0.0` without another feature pass.
 
 ## Release-candidate checks
 
-The exact Beta 8 candidate must compile and package successfully in the Windows PR workflow before merge. The release is complete only when GitHub Releases contains both:
+The exact RC must compile and package successfully in the Windows PR workflow before merge. The release is complete only when GitHub Releases contains both:
 
 - `Stochas.GGD.clap`
-- `Stochas-GGD-v0.2.0-beta.8-Windows-x64.zip`
+- `Stochas-GGD-v1.0.0-rc.1-Windows-x64.zip`

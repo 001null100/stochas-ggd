@@ -29,7 +29,6 @@ public:
    virtual void automationParameterHasChanged(int paramId, int paramValue, int layer) = 0;
 
    // return textual representation of a parameter given id and value
-   virtual String getTextForAutomationParameterValue(int paramId, int paramValue, int layer) = delete;
    virtual String getTextForAutomationParameterValue(int paramId, int paramValue) = 0;
 
    // parse string to value
@@ -92,7 +91,7 @@ class SeqAudioProcessorParameter : public AudioProcessorParameter {
    // should return a string representing the value
    virtual String getText(float value, int) const override;
 
-   // should parse string and return value for it
+   // should parse string to value
    virtual float getValueForText(const String & text) const override;
 
    bool isAutomatable() const override { return true; }

@@ -102,16 +102,16 @@ void GgdDrumGrid::duplicateSelectionWithOffset(int deltaTicks, float velocitySca
     if (created.empty())
         return;
 
-    for (const auto& ref : created)
-        addSelection(ref);
+    // Addition actions should hand the user the result they just created. This
+    // makes Flam/Double chain naturally: the grace/follow-up hits become the
+    // selection, rather than accumulating the source and destination together.
+    selection = std::move(created);
     publishChange();
 }
 
 void GgdDrumGrid::createFlamFromSelection()
 {
     // 60 ticks is 1/64 at the 960 PPQ event resolution: ~31 ms at 120 BPM.
-    // A lower grace velocity keeps this useful across snares/toms without
-    // forcing a particular GGD articulation or tempo-dependent millisecond mode.
     duplicateSelectionWithOffset(-(GGD_EVENT_PPQ / 16), 0.64f);
 }
 

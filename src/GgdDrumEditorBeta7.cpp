@@ -4,8 +4,8 @@
 #include <functional>
 
 // Keep the rest of Beta 6 intact, but retain its replaced entry points under
-// compatibility names so Beta 7 can change the settings surface and follow
-// policy without copying the playback/presentation implementation.
+// compatibility names so the release-candidate shell can change settings and
+// follow policy without copying the playback/presentation implementation.
 #define initialiseBeta6Ui initialiseBeta6UiLegacy
 #define showSettingsDialog showSettingsDialogLegacy
 #define updatePlayheadFollow updatePlayheadFollowLegacy
@@ -200,9 +200,6 @@ void GgdDrumEditor::initialiseBeta6Ui()
     importMidiButton.setTooltip("Settings");
     importMidiButton.onClick = [this] { showSettingsDialog(); };
 
-    // Restore the explicit TextEditor focus setup used by the proven Alpha UI.
-    // This prevents host/editor focus handoff from intermittently turning Bars
-    // into a field that looks editable but does not receive typed digits.
     barsEditor.setWantsKeyboardFocus(true);
     barsEditor.setMouseClickGrabsKeyboardFocus(true);
     barsEditor.setMultiLine(false);
@@ -218,7 +215,7 @@ void GgdDrumEditor::initialiseBeta6Ui()
             grid->grabKeyboardFocus();
     };
 
-    productLabel.setTooltip("Stochas GGD  |  Beta 7");
+    productLabel.setTooltip("Stochas GGD  |  Beta 8  |  1.0 candidate");
     applyBeta6Preferences(false);
 }
 
@@ -308,9 +305,6 @@ void GgdDrumEditor::updatePlayheadFollow(int playPosition)
     if (followBaseGridWidth < 0)
         followBaseGridWidth = grid->getWidth();
 
-    // Give the content a temporary trailing runway while playback is active so
-    // the final half-screen of a pattern can remain genuinely centred instead
-    // of being forced against the viewport's right boundary.
     const int paddedWidth = followBaseGridWidth + centreOffset + 12;
     if (grid->getWidth() < paddedWidth)
         grid->setSize(paddedWidth, grid->getHeight());
@@ -322,9 +316,5 @@ void GgdDrumEditor::updatePlayheadFollow(int playPosition)
 
     followScrollTargetX = target;
     lastFollowPlayheadX = playX;
-
-    // Centre-lock is intentional rather than an eased chase. At the pattern
-    // start the viewport naturally clamps at zero; once enough timeline exists
-    // to the left, the playhead remains fixed at the visual centre.
     gridViewport.setViewPosition(target, gridViewport.getViewPositionY());
 }

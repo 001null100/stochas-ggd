@@ -13,14 +13,6 @@ juce::Colour bc(GgdThemeRole role)
 {
     return ggdThemeColour(role);
 }
-
-int wrapPositive(int value, int modulus)
-{
-    if (modulus <= 0)
-        return 0;
-    const int wrapped = value % modulus;
-    return wrapped < 0 ? wrapped + modulus : wrapped;
-}
 }
 
 void GgdDrumGrid::mouseDoubleClick(const juce::MouseEvent&)
@@ -141,39 +133,82 @@ void GgdDrumGrid::selectRowsContainingSelection()
     repaint();
 }
 
-void GgdDrumGrid::repeatSelection()
+void GgdDrumGrid::fillSelectionGaps()
 {
-    if (selection.empty())
+    if (selection.size() < 2 || snapTicks <= 0)
         return;
 
-    int minTick = selection.front().tick;
-    int maxTick = minTick;
-    std::vector<EventState> states;
-    states.reserve(selection.size());
+    std::map<int, std::vector<EventState>> byRow;
     for (const auto& ref : selection)
-    {
-        minTick = juce::jmin(minTick, ref.tick);
-        maxTick = juce::jmax(maxTick, ref.tick);
-        states.push_back(snapshotEvent(ref));
-    }
+        byRow[ref.row].push_back(snapshotEvent(ref));
 
-    const int span = juce::jmax(snapTicks, maxTick - minTick + snapTicks);
-    const int length = patternLengthTicks();
-    std::vector<EventRef> created;
-    for (const auto& state : states)
+    std::vector<EventRef> expandedSelection = selection;
+    bool changed = false;
+
+    for (auto& entry : byRow)
     {
-        const int target = state.ref.tick + span;
-        if (target < 0 || target >= length || eventOccupied(state.ref.row, target))
+        auto& states = entry.second;
+        if (states.size() < 2)
             continue;
-        if (writeEvent(state, state.ref.row, target))
-            created.push_back({ state.ref.row, target });
+
+        std::sort(states.begin(), states.end(),
+                  [](const EventState& a, const EventState& b)
+                  {
+                      return a.ref.tick < b.ref.tick;
+                  });
+
+        const int firstTick = states.front().ref.tick;
+        const int lastTick = states.back().ref.tick;
+        const int start = ((firstTick + snapTicks - 1) / snapTicks) * snapTicks;
+        const int end = (lastTick / snapTicks) * snapTicks;
+        if (start > end)
+            continue;
+
+        size_t rightIndex = 1;
+        for (int tick = start; tick <= end; tick += snapTicks)
+        {
+            if (eventOccupied(entry.first, tick))
+                continue;
+
+            while (rightIndex < states.size() && states[rightIndex].ref.tick < tick)
+                ++rightIndex;
+
+            const size_t leftIndex = rightIndex == 0 ? 0 : rightIndex - 1;
+            const size_t clampedRight = juce::jmin(rightIndex, states.size() - 1);
+            const auto& leftState = states[leftIndex];
+            const auto& rightState = states[clampedRight];
+
+            EventState state = leftState;
+            if (rightState.ref.tick != leftState.ref.tick)
+            {
+                const float t = juce::jlimit(
+                    0.0f, 1.0f,
+                    static_cast<float>(tick - leftState.ref.tick)
+                        / static_cast<float>(rightState.ref.tick - leftState.ref.tick));
+                state.velocity = juce::jlimit(
+                    1, 127,
+                    static_cast<int>(std::lround(
+                        leftState.velocity
+                        + (rightState.velocity - leftState.velocity) * t)));
+            }
+
+            state.ref = { entry.first, tick };
+            state.durationTicks = juce::jmin(
+                state.durationTicks, juce::jmax(1, snapTicks));
+            if (writeEvent(state, entry.first, tick))
+            {
+                expandedSelection.push_back({ entry.first, tick });
+                changed = true;
+            }
+        }
     }
 
-    if (created.empty())
-        return;
-
-    selection = std::move(created);
-    publishChange();
+    if (changed)
+    {
+        selection = std::move(expandedSelection);
+        notifySelectionChanged();
+        publishChange();
+    }
 }
 
 void GgdDrumGrid::mirrorSelectedTiming()
@@ -269,49 +304,49 @@ void GgdDrumGrid::rampSelectedVelocity(bool rising)
         publishChange();
 }
 
-void GgdDrumGrid::rotateSelection(int direction)
+void GgdDrumGrid::scaleSelectedVelocityRange(float factor)
 {
-    if (selection.size() < 2 || direction == 0)
+    if (selection.size() < 2 || factor <= 0.0f)
         return;
 
-    int minTick = selection.front().tick;
-    int maxTick = minTick;
-    std::vector<EventState> states;
-    states.reserve(selection.size());
+    auto* p = pattern();
+    if (p == nullptr)
+        return;
+
+    float total = 0.0f;
+    int count = 0;
     for (const auto& ref : selection)
     {
-        minTick = juce::jmin(minTick, ref.tick);
-        maxTick = juce::jmax(maxTick, ref.tick);
-        states.push_back(snapshotEvent(ref));
+        if (const auto* event = p->findEventPtr(storageRowForCanonical(ref.row), ref.tick))
+        {
+            total += static_cast<float>(event->velocity);
+            ++count;
+        }
     }
+    if (count < 2)
+        return;
 
-    const int span = juce::jmax(snapTicks, maxTick - minTick + snapTicks);
-    const int amount = (direction < 0 ? -snapTicks : snapTicks);
-    std::set<std::pair<int, int>> targets;
-    std::vector<EventRef> destination;
-    destination.reserve(states.size());
-
-    for (const auto& state : states)
+    const float mean = total / static_cast<float>(count);
+    bool changed = false;
+    for (const auto& ref : selection)
     {
-        const int target = minTick + wrapPositive(state.ref.tick - minTick + amount, span);
-        const EventRef targetRef { state.ref.row, target };
-        if (target < 0 || target >= patternLengthTicks()
-            || !targets.insert({ targetRef.row, targetRef.tick }).second
-            || (eventOccupied(targetRef.row, targetRef.tick) && !isSelected(targetRef)))
-            return;
-        destination.push_back(targetRef);
+        auto* event = p->findEventPtr(storageRowForCanonical(ref.row), ref.tick);
+        if (event == nullptr)
+            continue;
+
+        const int velocity = juce::jlimit(
+            1, 127,
+            static_cast<int>(std::lround(
+                mean + (static_cast<float>(event->velocity) - mean) * factor)));
+        if (event->velocity != velocity)
+        {
+            event->velocity = static_cast<std::uint8_t>(velocity);
+            changed = true;
+        }
     }
 
-    for (const auto& state : states)
-        removeEvent(state.ref);
-
-    selection.clear();
-    for (size_t i = 0; i < states.size(); ++i)
-    {
-        if (writeEvent(states[i], destination[i].row, destination[i].tick))
-            selection.push_back(destination[i]);
-    }
-    publishChange();
+    if (changed)
+        publishChange();
 }
 
 void GgdDrumGrid::thinSelection()
@@ -339,6 +374,7 @@ void GgdDrumGrid::thinSelection()
     for (const auto& ref : remove)
         removeEvent(ref);
     selection = std::move(keep);
+    notifySelectionChanged();
     publishChange();
 }
 
@@ -350,6 +386,27 @@ void GgdDrumGridBeta7::paint(juce::Graphics& g)
 
 void GgdDrumGridBeta7::mouseDown(const juce::MouseEvent& e)
 {
+    // Group headers remain full-width visual dividers, but the grid portion is
+    // inert. Collapse/expand is deliberately restricted to the sticky left
+    // articulation panel so an accidental click in the timeline cannot fold a
+    // whole instrument family away.
+    if (const auto* item = itemAtY(e.position.y))
+    {
+        if (item->header)
+        {
+            const int stickyX = currentViewX();
+            const bool overInstrumentPanel = e.position.x >= stickyX
+                                          && e.position.x < stickyX + nameWidth;
+            if (!overInstrumentPanel)
+            {
+                valuePopupKind = ValuePopupKind::none;
+                valuePopupPinned = false;
+                repaint();
+                return;
+            }
+        }
+    }
+
     if (toolMode == ToolMode::select
         && e.mods.isShiftDown()
         && !e.mods.isAltDown()
@@ -367,8 +424,6 @@ void GgdDrumGridBeta7::mouseDown(const juce::MouseEvent& e)
             selectVelocityRef = hit;
             selectVelocityStartStates.clear();
             dragMode = DragMode::velocity;
-            const auto state = snapshotEvent(hit);
-            showValuePopup(ValuePopupKind::velocity, hit, state.velocity, true);
             return;
         }
     }
@@ -472,13 +527,20 @@ void GgdDrumGridBeta7::mouseUp(const juce::MouseEvent& e)
         if (!selectVelocityStarted)
         {
             toggleSelection(selectVelocityRef);
+            if (e.mods.isShiftDown())
+            {
+                showValuePopup(ValuePopupKind::velocity,
+                               selectVelocityRef,
+                               snapshotEvent(selectVelocityRef).velocity,
+                               true);
+            }
         }
         else
         {
             showValuePopup(ValuePopupKind::velocity,
                            selectVelocityRef,
                            snapshotEvent(selectVelocityRef).velocity,
-                           false);
+                           e.mods.isShiftDown());
         }
 
         selectVelocityPending = false;
@@ -504,6 +566,60 @@ void GgdDrumGridBeta7::mouseUp(const juce::MouseEvent& e)
         showValuePopup(ValuePopupKind::velocity, previousRef, popupValue, false);
     else if (previousMode == DragMode::timing && previousRef.tick >= 0)
         showValuePopup(ValuePopupKind::timing, previousRef, popupValue, false);
+}
+
+void GgdDrumGridBeta7::mouseMove(const juce::MouseEvent& e)
+{
+    GgdDrumGrid::mouseMove(e);
+
+    if (e.mods.isShiftDown()
+        && !e.mods.isAltDown()
+        && !e.mods.isCtrlDown()
+        && !e.mods.isCommandDown())
+    {
+        const auto hit = eventAt(e.position.x, e.position.y);
+        if (hit.tick >= 0)
+        {
+            showValuePopup(ValuePopupKind::velocity,
+                           hit,
+                           snapshotEvent(hit).velocity,
+                           true);
+            return;
+        }
+    }
+
+    if (dragMode == DragMode::none && !selectVelocityPending
+        && valuePopupKind == ValuePopupKind::velocity)
+    {
+        valuePopupKind = ValuePopupKind::none;
+        valuePopupPinned = false;
+        repaint();
+    }
+}
+
+void GgdDrumGridBeta7::mouseExit(const juce::MouseEvent& e)
+{
+    GgdDrumGrid::mouseExit(e);
+    if (dragMode == DragMode::none && !selectVelocityPending
+        && valuePopupKind == ValuePopupKind::velocity)
+    {
+        valuePopupKind = ValuePopupKind::none;
+        valuePopupPinned = false;
+        repaint();
+    }
+}
+
+void GgdDrumGridBeta7::modifierKeysChanged(const juce::ModifierKeys& modifiers)
+{
+    if (!modifiers.isShiftDown()
+        && dragMode == DragMode::none
+        && !selectVelocityPending
+        && valuePopupKind == ValuePopupKind::velocity)
+    {
+        valuePopupKind = ValuePopupKind::none;
+        valuePopupPinned = false;
+        repaint();
+    }
 }
 
 void GgdDrumGridBeta7::mouseDoubleClick(const juce::MouseEvent& e)

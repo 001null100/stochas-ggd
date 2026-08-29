@@ -94,15 +94,16 @@ include_directories(src)
 target_include_directories(stochas PRIVATE "${CMAKE_BINARY_DIR}/geninclude")
 juce_generate_juce_header(stochas)
 
-# Beta 5 keeps the Beta 4 visual system and Beta 3 workflow features, while
-# replacing the grid interaction translation unit with corrected hit geometry,
-# unconditional right-click erase, drag interpolation and articulation audition.
+# Beta 6 keeps the Beta 5 editing fixes, then adds local editor preferences,
+# modal settings, viewport playhead following, smoother interpolation/glow and
+# cell-centred hit presentation without changing stored event timing.
 target_sources(stochas PRIVATE
     src/EditorState.cpp
     src/GgdDrumEditorBeta2.cpp
     src/GgdDrumEditorBeta3.cpp
     src/GgdDrumEditorBeta4.cpp
-    src/GgdDrumGridBeta5.cpp
+    src/GgdDrumEditorBeta6.cpp
+    src/GgdDrumGridBeta6.cpp
     src/GgdDrumGridBeta3.cpp
     src/GgdUiTheme.cpp
     src/GgdEventModel.cpp

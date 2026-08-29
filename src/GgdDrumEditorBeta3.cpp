@@ -51,7 +51,7 @@ void GgdDrumEditor::updateSelectionPropertyControls()
 
     // JUCE does not always refresh the closed ComboBox caption when an already
     // selected item's text changes. Update the item then explicitly reselect the
-    // same ID, preserving pattern identity while refreshing the visible caption.
+    // same ID, but only when the visible caption is actually stale.
     if (auto* layer = processor.mData.getUISeqData()->getLayer(0))
     {
         const int pattern = layer->getCurrentPattern();
@@ -59,8 +59,11 @@ void GgdDrumEditor::updateSelectionPropertyControls()
         const auto caption = name.isNotEmpty() && name != SEQ_DEFAULT_PAT_NAME
             ? juce::String(pattern + 1) + "  " + name
             : "Pattern " + juce::String(pattern + 1);
-        patternSelector.changeItemText(pattern + 1, caption);
-        patternSelector.setSelectedId(pattern + 1, juce::dontSendNotification);
+        if (patternSelector.getText() != caption)
+        {
+            patternSelector.changeItemText(pattern + 1, caption);
+            patternSelector.setSelectedId(pattern + 1, juce::dontSendNotification);
+        }
     }
 
     const bool selectMode = grid->getToolMode() == GgdDrumGrid::ToolMode::select;

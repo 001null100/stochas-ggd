@@ -8,6 +8,48 @@
 #include "StochaEngine.cpp"
 #undef processBlock
 
+void StochaEngine::notifyPlayedEvent(int row, int tick, int velocity)
+{
+    int start1 = 0, size1 = 0, start2 = 0, size2 = 0;
+    mPlayedEventFifo.prepareToWrite(1, start1, size1, start2, size2);
+
+    const int index = size1 > 0 ? start1 : (size2 > 0 ? start2 : -1);
+    if (index >= 0)
+    {
+        auto& event = mPlayedEvents[index];
+        event.row = row;
+        event.tick = tick;
+        event.velocity = juce::jlimit(1, 127, velocity);
+    }
+
+    mPlayedEventFifo.finishedWrite(size1 + size2);
+}
+
+bool StochaEngine::popPlayedEvent(int *row, int *tick, int *velocity)
+{
+    int start1 = 0, size1 = 0, start2 = 0, size2 = 0;
+    mPlayedEventFifo.prepareToRead(1, start1, size1, start2, size2);
+
+    const int index = size1 > 0 ? start1 : (size2 > 0 ? start2 : -1);
+    if (index < 0)
+    {
+        mPlayedEventFifo.finishedRead(0);
+        return false;
+    }
+
+    const auto event = mPlayedEvents[index];
+    if (row != nullptr) *row = event.row;
+    if (tick != nullptr) *tick = event.tick;
+    if (velocity != nullptr) *velocity = event.velocity;
+    mPlayedEventFifo.finishedRead(size1 + size2);
+    return true;
+}
+
+void StochaEngine::clearPlayedEvents()
+{
+    mPlayedEventFifo.reset();
+}
+
 bool StochaEngine::processBlock(double beatPosition,
                                 double sampleRate,
                                 int numSamplesInBlock,
@@ -62,6 +104,12 @@ bool StochaEngine::processEventBlock(double beatPosition,
     const int patternLength = pattern->getLengthTicks();
     if (patternLength <= 0)
         return true;
+
+    // playbackStopped() resets the generic position marker. Clear the event
+    // scheduler's previous block marker on the first block of a new run too,
+    // otherwise a restart can be mistaken for a transport discontinuity.
+    if (mRealStepPosition < 0.0)
+        mOldEventTickPosition = -1.0;
 
     const double clockScale = std::max(
         1.0 / 16.0,
@@ -179,7 +227,13 @@ bool StochaEngine::processEventBlock(double beatPosition,
                                       static_cast<int8_t>(velocity),
                                       static_cast<int8_t>(channel),
                                       durationSamples))
+                    {
                         success = false;
+                    }
+                    else
+                    {
+                        notifyPlayedEvent(event->row, event->tick, velocity);
+                    }
                 }
             }
 

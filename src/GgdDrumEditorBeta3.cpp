@@ -50,8 +50,8 @@ void GgdDrumEditor::updateSelectionPropertyControls()
         return;
 
     // JUCE does not always refresh the closed ComboBox caption when an already
-    // selected item's text changes. Keep the active slot caption explicitly in
-    // sync with the underlying pattern name.
+    // selected item's text changes. Update the item then explicitly reselect the
+    // same ID, preserving pattern identity while refreshing the visible caption.
     if (auto* layer = processor.mData.getUISeqData()->getLayer(0))
     {
         const int pattern = layer->getCurrentPattern();
@@ -59,8 +59,8 @@ void GgdDrumEditor::updateSelectionPropertyControls()
         const auto caption = name.isNotEmpty() && name != SEQ_DEFAULT_PAT_NAME
             ? juce::String(pattern + 1) + "  " + name
             : "Pattern " + juce::String(pattern + 1);
-        if (patternSelector.getText() != caption)
-            patternSelector.setText(caption, juce::dontSendNotification);
+        patternSelector.changeItemText(pattern + 1, caption);
+        patternSelector.setSelectedId(pattern + 1, juce::dontSendNotification);
     }
 
     // Beta 5 turns the redundant standalone Import MIDI button into a compact

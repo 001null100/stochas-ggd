@@ -56,21 +56,31 @@ public:
     void createDoubleFromSelection();
     void deleteSelected();
 
+    // Beta 7 context-strip transforms. These are intentionally selection-based
+    // and complementary to the existing keyboard vocabulary rather than button
+    // duplicates of copy/nudge commands.
+    void selectRowsContainingSelection();
+    void repeatSelection();
+    void mirrorSelectedTiming();
+    void rampSelectedVelocity(bool rising);
+    void rotateSelection(int direction);
+    void thinSelection();
+
     bool keyPressed(const juce::KeyPress& key) override;
-    // The Beta 2 editor wrapper macro-renames its inherited key handler. That
-    // macro also touches the call through to the grid, so provide this tiny
-    // forwarding alias rather than duplicating the editor implementation.
     bool keyPressedLegacy(const juce::KeyPress& key);
     void paint(juce::Graphics& g) override;
     void mouseDown(const juce::MouseEvent& e) override;
     void mouseDrag(const juce::MouseEvent& e) override;
     void mouseUp(const juce::MouseEvent& e) override;
     void mouseMove(const juce::MouseEvent& e) override;
+    void mouseDoubleClick(const juce::MouseEvent& e) override;
     void mouseExit(const juce::MouseEvent& e) override;
     void mouseWheelMove(const juce::MouseEvent& e,
                         const juce::MouseWheelDetails& wheel) override;
 
 private:
+    friend class GgdDrumGridBeta7;
+
     struct LayoutItem
     {
         bool header = false;
@@ -101,14 +111,18 @@ private:
     {
         none,
         paint,
-        // The Beta 2 compatibility translation temporarily macro-renames the
-        // token `paint`; keep an enum alias so DragMode::paint references in the
-        // inherited interaction implementation remain valid under that include.
         paintLegacy = paint,
         velocity,
         timing,
         marquee,
         move
+    };
+
+    enum class ValuePopupKind
+    {
+        none,
+        velocity,
+        timing
     };
 
     SeqAudioProcessor& processor;
@@ -161,6 +175,17 @@ private:
     juce::Point<float> marqueeStart;
     juce::Rectangle<float> marqueeRect;
     bool marqueeAdditive = false;
+
+    ValuePopupKind valuePopupKind = ValuePopupKind::none;
+    EventRef valuePopupRef;
+    int valuePopupValue = 0;
+    double valuePopupUntilMs = 0.0;
+    bool valuePopupPinned = false;
+
+    bool selectVelocityPending = false;
+    bool selectVelocityStarted = false;
+    EventRef selectVelocityRef;
+    std::vector<EventState> selectVelocityStartStates;
 
     bool fallbackDDown = false;
     bool fallbackSDown = false;
@@ -237,18 +262,17 @@ private:
     void notifyZoomChanged();
     float interpolatedPlayTick() const;
 
-    // Beta 6 keeps the inherited event editing core available under private
-    // compatibility names while replacing the mouse paths that need cell-based
-    // drawing, free-resolution erasing and articulation audition.
+    int quantizedTickFor(int tick) const;
+    int timingOffsetFromGrid(int tick) const;
+    void showValuePopup(ValuePopupKind kind, const EventRef& ref, int value, bool pinned = false);
+    void paintValuePopup(juce::Graphics& g);
+
     EventRef eventAtLegacy(float x, float y) const;
     void mouseDownLegacy(const juce::MouseEvent& e);
     void mouseDragLegacy(const juce::MouseEvent& e);
     void mouseUpLegacy(const juce::MouseEvent& e);
     void mouseMoveLegacy(const juce::MouseEvent& e);
 
-    // Beta 2 compiles the Beta 1 implementation as a compatibility base and
-    // replaces presentation/playhead methods. These declarations are the
-    // renamed legacy definitions used by that translation unit.
     void setPlayPositionLegacy(int stepPosition);
     void paintLegacy(juce::Graphics& g);
 };

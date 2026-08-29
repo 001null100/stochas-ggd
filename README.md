@@ -25,7 +25,7 @@ The plugin is currently developed and tested primarily as a **CLAP note effect i
   - straight mode: `1/16`, optionally switching to `1/32` at 350%+ zoom
   - Triplet mode: `1/8T`, optionally switching to `1/16T` at 350%+ zoom
 - Per-pattern bar count and time signature across eight internal pattern slots.
-- Smooth interpolated playhead, optional follow-scrolling and host transport sync.
+- Smooth interpolated playhead, optional centre-locked follow and host transport sync.
 - Live MIDI passthrough so the instrument remains playable through the note effect.
 - Semantic drum rows translated through the active GGD kit map.
 - Click an articulation/instrument name to audition its mapped note through the downstream GGD instrument.
@@ -36,7 +36,10 @@ The plugin is currently developed and tested primarily as a **CLAP note effect i
 - Cell-centred hit presentation and cell-based Draw-mode targeting.
 - Draw-mode right-click erasing that can target off-grid/triplet hits regardless of the current snap mode.
 - Interpolated paint-drag so fast mouse movement cannot silently jump over intermediate subdivisions.
-- Ghost, Accent, Humanize, Quantize, Flam and Double performance actions.
+- Direct Shift-drag velocity and Alt-drag timing editing with transient value readouts above the edited hit.
+- Alt-double-click single-hit timing reset by quantizing to the nearest active subdivision.
+- Selection transforms for row selection, repeat, timing mirror, velocity ramps, rotation and density thinning.
+- Ghost, Accent, Humanize, Flam and Double performance actions.
 - Per-hit probability editing.
 - High-resolution MIDI export through the active destination kit mapping.
 - Pattern names up to 32 visible characters.
@@ -49,10 +52,9 @@ The plugin is currently developed and tested primarily as a **CLAP note effect i
 The compact `...` button at the right side of the top bar opens an in-plugin modal Settings overlay. These options are local workstation preferences and do not modify project or pattern data:
 
 - **Theme** — Graphite, Midnight, Ember or Contrast.
-- **Follow playhead while playing** — automatically scroll the horizontal timeline as playback moves beyond the visible region.
+- **Lock playhead to timeline centre while playing** — horizontally scroll the timeline so playback remains centred once enough content exists to the left.
 - **Smooth playhead interpolation** — use higher-cadence visual interpolation between coarse host position notifications.
 - **Playhead forward glow** — enable the fading directional glow to the right of the cursor.
-- **Follow edge margin** — choose how close the playhead can approach the right edge before following begins.
 - **Automatically use finer grid at high zoom** — toggle the 350% automatic straight/triplet resolution change.
 
 The modal applies changes live, persists them locally, and closes with **Done** or **Escape**.
@@ -114,15 +116,35 @@ In **Draw** mode, the visible space between two timing lines is treated as one g
 
 Dragging paints every crossed subdivision even when the cursor moves faster than the UI event rate. Right-click is always destructive: click or drag over hits to erase them. Right-click hit-testing follows actual event bodies, so a triplet can be erased while a straight grid is selected and vice versa.
 
-Because centering is presentation-only, the 960 PPQ event timestamp, playback timing, MIDI import/export timing and native pattern persistence are unchanged.
+For detailed hit editing:
 
-The Bars field selects its complete value when focused, making bar-count replacement a click-and-type operation.
+- **Shift-drag** a hit vertically to adjust velocity. A `VEL` bubble appears above it with the current value.
+- **Alt-drag** a hit horizontally to move it freely in ticks. A `TIME` bubble shows its signed offset from the nearest current subdivision.
+- **Alt-double-click** a hit to quantize that one hit to the nearest current subdivision.
+- In **Select** mode, Shift-click still toggles selection. If the gesture actually becomes a Shift-drag, it adjusts velocity instead; a multi-selection moves together while preserving relative velocity differences.
+
+Because cell centering is presentation-only, the 960 PPQ event timestamp, playback timing, MIDI import/export timing and native pattern persistence are unchanged.
+
+The Bars field explicitly grabs keyboard focus, selects its complete value when focused, and supports click-and-type replacement. Return commits the new count and returns focus to the grid.
+
+### Selection transforms
+
+The context strip reserves permanent buttons for operations that do more than duplicate keyboard shortcuts:
+
+- **Rows** — select all hits on the instrument rows represented by the current selection.
+- **Repeat** — copy the selected phrase immediately after its span; the new copy stays selected for repeated chaining.
+- **Mirror** — reflect selected timing around the selection's temporal centre.
+- **Ramp+ / Ramp-** — create rising or falling velocity contours across the selected hits.
+- **Rot < / Rot >** — rotate selected events by one current subdivision while wrapping inside the selection span.
+- **Thin** — remove every second selected hit independently on each selected instrument row.
+
+Keyboard shortcuts remain available for the basic editing operations: `A` select all, `C` copy, `V` paste, arrows move/nudge, and Alt+arrows duplicate while moving.
 
 ## Playhead and navigation
 
-With **Follow playhead while playing** enabled, only the timeline's horizontal position follows playback. Vertical articulation scrolling stays where you put it.
+With **Lock playhead to timeline centre while playing** enabled, only the timeline's horizontal position follows playback. Vertical articulation scrolling stays where you put it.
 
-Once the playhead reaches the configured right-edge margin, the viewport moves continuously so the cursor remains visible rather than page-jumping. Pattern wrap returns the view toward the beginning.
+At the beginning of a pattern the view naturally stays at the left edge. Once enough content exists to the left, the playhead remains fixed at the visible timeline centre while the grid moves underneath it. Temporary trailing scroll space during playback lets the final half-screen remain centred as well; that extra runway disappears when transport stops.
 
 Smooth mode reconstructs display motion between the existing coarse host step notifications and uses a higher visual update cadence. This is a UI interpolation feature only; the audio/event scheduler is unchanged.
 

@@ -1,87 +1,119 @@
-# Stochas GGD v0.2.0-beta.6
+# Stochas GGD v0.2.0-beta.7
 
-Beta 6 focuses on playback navigation and editor presentation. It builds directly on the Beta 5 interaction fixes and leaves the event scheduler, semantic pattern model and stored note timing unchanged.
+Beta 7 is an editing-workflow pass on top of Beta 6. It restores high-information interactions that were lost during the visual rewrite, makes playhead following truly centre-locked, hardens bar-count text entry, and replaces redundant context-strip buttons with pattern transforms. The audio scheduler and stored event timing are unchanged.
 
-## Real settings modal
+## Velocity and timing feedback restored
 
-The compact `...` control now opens a proper in-plugin modal Settings overlay instead of a popup menu. The editor behind it is dimmed and blocked until the modal closes with **Done** or **Escape**.
+Velocity and free-timing edits once again show a compact value bubble directly above the note being edited.
 
-Settings apply live and are stored as local editor preferences rather than project/pattern data:
+- **Shift-drag velocity** shows `VEL <value>` while dragging.
+- **Alt-drag timing** shows the signed tick offset from the nearest active subdivision, for example `TIME +18t`.
+- The bubble remains briefly after release so the final value is readable without permanently cluttering the grid.
+- The popup follows the note while timing is moved and respects the horizontally scrolled sticky articulation column.
 
-- **Theme** — Graphite, Midnight, Ember or Contrast.
-- **Follow playhead while playing** — horizontally scroll the timeline as playback advances.
-- **Smooth playhead interpolation** — higher-cadence visual interpolation between host step notifications.
-- **Playhead forward glow** — enable/disable the directional light trail to the right of the cursor.
-- **Follow edge margin** — choose how close the playhead may approach the right side before the viewport begins following it, from 0–30%.
-- **Automatically use finer grid at high zoom** — retain the existing 350% automatic 1/32 / 1/16T switch, or keep zoom purely visual.
+## Alt-double-click timing reset
 
-These preferences use the same local PropertiesFile as the existing theme choice and do not alter saved musical content.
+Alt-double-clicking a hit now performs the event-model equivalent of resetting timing: it quantizes that individual hit to the **nearest currently active subdivision**.
 
-## Follow-playhead scrolling
+This works with the visible editing resolution, including straight and triplet grids. If the destination is already occupied by another event on the same row, the editor leaves the hit unchanged rather than destroying or merging notes.
 
-When Follow Playhead is enabled, the horizontal timeline viewport now keeps playback visible.
+## Shift-drag velocity in Select mode
 
-- normal vertical articulation scrolling is never changed
-- once the playhead reaches the configured right-edge margin, the viewport follows continuously rather than jumping one page at a time
-- pattern wrap returns the horizontal view toward the start
-- follow movement is eased instead of snapping directly to the target position
-- disabling Follow Playhead leaves manual horizontal scrolling completely alone
+Select mode now supports direct velocity editing without sacrificing Shift-click multi-selection.
 
-## Smoother playhead
+- **Shift-click** still toggles a hit in or out of the selection.
+- Once a Shift gesture actually moves a few pixels, it becomes a velocity drag instead.
+- If the dragged hit belongs to a multi-selection, every selected hit changes by the same relative amount while preserving the velocity differences between them.
+- If the dragged hit was not selected, it becomes the selection before the velocity gesture begins.
 
-The host notifier exposes playback position at a coarser 1/16-step cadence than the display refresh. Beta 6 improves the visual interpolation between those notifications without changing audio timing.
+## Bars keyboard input hardened
 
-- smooth mode updates the editor timer at 120 Hz instead of 60 Hz
-- observed step duration is filtered more gently to reduce callback jitter
-- new host step notifications preserve most of the already-predicted visual phase instead of snapping the cursor back to every step boundary
-- smoothing can be disabled in Settings to show the coarse host position directly
+The Bars field now explicitly behaves as a focusable, editable JUCE TextEditor rather than relying on inherited host focus behavior.
 
-This is deliberately a presentation layer. `StochaEngineBeta.cpp` and the host-PPQ event scheduler are unchanged.
+- mouse click explicitly grabs keyboard focus
+- the entire value remains selected on focus
+- typing replaces the old value immediately
+- Return commits the new bar count and gives keyboard focus back to the grid
+- the field accepts up to four numeric digits
+- model refresh still refuses to overwrite the field while the user is editing it
 
-## Directional playhead glow
+## Centre-locked playhead following
 
-The playhead keeps a crisp timing edge but now optionally emits a soft fading glow approximately 52 px to its right. The glow suggests forward motion without smearing the actual cursor position. Sticky articulation labels are painted after the playhead so the effect never leaks into the name column.
+Follow Playhead no longer chases a configurable right-edge margin. When enabled, playback is locked to the **centre of the visible timeline** as soon as enough content exists to scroll there.
 
-## Hits centered in grid cells
+- only horizontal timeline position moves; articulation-row vertical scroll is untouched
+- the beginning naturally remains left-aligned until the playhead reaches the centre position
+- while playing, temporary trailing viewport runway is added so the final half-screen of the pattern can remain centred too
+- stopping playback removes that temporary runway and restores the normal content width
+- the old Follow Edge Margin control has been removed from Settings because centre-lock makes it obsolete
 
-Beta 5 corrected the original half-clipped tick-0 rendering by treating the event timestamp as the start of the hit body. Beta 6 takes the step-sequencer presentation one stage further: **hits are visually centered inside the grid spaces between timing markers**.
+Beta 6 smooth interpolation and optional forward glow remain available.
 
-- bar/beat/subdivision lines remain the musical timing boundaries
-- a hit at a grid timestamp is drawn in the middle of the following grid cell
-- the first tick-0 hit remains fully visible
-- hover targets, selection hit-testing, move previews and right-click erasing use the same centered geometry
-- stored event ticks, MIDI import/export timing and playback timing remain unchanged
+## Redundant strip buttons replaced with transforms
 
-## Cell-based Draw mode
+The permanent **All / Copy / Paste**, **Vel +/-**, and **Earlier / Quantize / Later** buttons duplicated operations already faster from the keyboard or direct manipulation. Their slots now expose pattern-level transforms instead.
 
-Because the note graphic is now centered in a grid space, Draw mode also treats that space as the clickable unit.
+### Rows
+Select every event on each instrument row represented by the current selection. Useful for grabbing an entire kick, snare, hat or articulation line after selecting one representative hit.
 
-Previously the editor chose the nearest grid line, so clicking the right half of a visible cell could select the next subdivision. Beta 6 uses the cell under the mouse instead:
+### Repeat
+Copy the selected phrase immediately after its current temporal span. The new copy becomes selected, so repeated clicks can walk a phrase forward through the pattern.
 
-- click anywhere between two grid lines to edit that cell
-- paint dragging still interpolates every crossed subdivision
-- right-click remains an unconditional free-resolution eraser and can still delete triplet/off-grid events regardless of the active snap mode
-- Shift velocity drag, Alt timing drag and Select mode continue to hit-test the actual event body
+### Mirror
+Reflect selected event timing around the temporal centre of the selection while keeping each event on its current instrument row.
 
-## Beta 5 workflow retained
+### Ramp+ / Ramp-
+Create rising or falling velocity contours across selected hits. Existing velocity spread is respected; nearly-flat selections are expanded into a useful dynamic range before the ramp is applied.
 
-Beta 6 keeps the previous release's workflow fixes:
+### Rot < / Rot >
+Rotate selected events left or right by one current subdivision, wrapping inside the selection's own temporal span.
+
+### Thin
+Remove every second selected event independently on each instrument row, providing a quick density-reduction operation.
+
+The original keyboard workflow remains:
+
+- `A` select all
+- `C` copy
+- `V` paste
+- arrow keys move/nudge selection
+- Alt + arrows duplicate while moving
+- direct Shift-drag handles velocity
+- direct Alt-drag handles timing
+
+Ghost, Accent, probability presets, Humanize, Flam and Double remain in the strip because they provide distinct performance operations rather than shortcut duplicates.
+
+## Beta 6 presentation retained
+
+Beta 7 keeps:
+
+- modal local Settings
+- Graphite / Midnight / Ember / Contrast themes
+- 120 Hz optional playhead interpolation
+- optional directional playhead glow
+- cell-centred hit presentation
+- cell-based Draw targeting
+- readability hierarchy of bars > beats > primary subdivisions > fine subdivisions
+- clear instrument-family separation
+
+## Previous workflow fixes retained
+
+Beta 7 also preserves:
 
 - unconditional right-click erase in Draw mode
-- resolution-independent erasing across straight/triplet grids
-- skipped-subdivision protection during paint dragging
+- free-resolution erasing across straight/triplet hits
+- interpolation across skipped subdivisions during paint drags
 - articulation-name audition through the downstream GGD instrument
-- click-and-type Bars editing
 - live pattern-slot caption refresh
 - 32-character pattern names
-- Grooves / Patterns browser workflow
+- indexed Grooves / Patterns browser
 - high-resolution MIDI import/export
-- semantic `.sggdp` pattern files
-- per-hit probability, Ghost, Accent, Flam, Double, Humanize and Quantize actions
+- semantic `.sggdp` pattern storage
+- per-hit probability, Ghost, Accent, Flam, Double and Humanize actions
 
 ## Engine intentionally unchanged
 
-Beta 6 does **not** modify:
+Beta 7 does **not** modify:
 
 - host-PPQ event scheduling
 - 960 PPQ event storage
@@ -95,14 +127,14 @@ Beta 6 does **not** modify:
 
 ## Current boundaries
 
-- MIDI export remains file-based; direct MIDI drag-out into Bitwig is not implemented yet.
+- MIDI export remains file-based; direct MIDI drag-out into Bitwig is still not implemented.
 - Probability still uses quick presets rather than a dedicated lane/arbitrary-value editor.
 - Experimental GGD Groove Player source pitch 85 remains intentionally unresolved.
-- Playhead smoothing reconstructs motion from the existing coarse notifier; it is visual interpolation, not a new audio-thread timing feed.
+- Playhead smoothing remains display interpolation reconstructed from the existing host notifier rather than a new audio-thread timing feed.
 
 ## Release-candidate checks
 
-The exact Beta 6 release candidate must compile and package successfully in the Windows PR workflow before merge. The release is complete only when GitHub Releases contains both:
+The exact Beta 7 release candidate must compile and package successfully in the Windows PR workflow before merge. The release is complete only when GitHub Releases contains both:
 
 - `Stochas.GGD.clap`
-- `Stochas-GGD-v0.2.0-beta.6-Windows-x64.zip`
+- `Stochas-GGD-v0.2.0-beta.7-Windows-x64.zip`

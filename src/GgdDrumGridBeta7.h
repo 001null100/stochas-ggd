@@ -6,7 +6,7 @@
 // scheduler and Beta 6 rendering remain owned by GgdDrumGrid; this wrapper only
 // restores high-information edit feedback and layers release-candidate input
 // behavior on top.
-class GgdDrumGridBeta7 final : public GgdDrumGrid
+class GgdDrumGridBeta7 : public GgdDrumGrid
 {
 public:
     using GgdDrumGrid::GgdDrumGrid;

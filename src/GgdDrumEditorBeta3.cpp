@@ -38,6 +38,44 @@ void GgdDrumEditor::initialiseBeta3Ui()
     flamButton.onClick = [this] { if (grid) grid->createFlamFromSelection(); };
     doubleButton.onClick = [this] { if (grid) grid->createDoubleFromSelection(); };
 
+    // Beta 7 removes permanent buttons that merely duplicate A/C/V, arrows,
+    // Shift-drag and Alt-drag. Reuse those eight slots for pattern-shaping
+    // operations that are meaningfully faster as one-click transforms.
+    auto transform = [](juce::TextButton& button,
+                        const juce::String& text,
+                        const juce::String& tooltip)
+    {
+        button.setButtonText(text);
+        button.setTooltip(tooltip);
+        button.setMouseClickGrabsKeyboardFocus(false);
+    };
+
+    transform(selectAllButton, "Rows",
+              "Select every hit on the instrument rows represented by the current selection");
+    transform(copyButton, "Repeat",
+              "Repeat the selected phrase immediately after its current span; the new copy stays selected");
+    transform(pasteButton, "Mirror",
+              "Mirror selected hit timing around the selection's temporal centre");
+    transform(velocityDownButton, "Ramp+",
+              "Create a rising velocity ramp across the selected hits");
+    transform(velocityUpButton, "Ramp-",
+              "Create a falling velocity ramp across the selected hits");
+    transform(timingEarlierButton, "Rot <",
+              "Rotate selected timing left by one current subdivision, wrapping inside the selection span");
+    transform(timingResetButton, "Thin",
+              "Remove every second selected hit on each instrument row");
+    transform(timingLaterButton, "Rot >",
+              "Rotate selected timing right by one current subdivision, wrapping inside the selection span");
+
+    selectAllButton.onClick = [this] { if (grid) grid->selectRowsContainingSelection(); };
+    copyButton.onClick = [this] { if (grid) grid->repeatSelection(); };
+    pasteButton.onClick = [this] { if (grid) grid->mirrorSelectedTiming(); };
+    velocityDownButton.onClick = [this] { if (grid) grid->rampSelectedVelocity(true); };
+    velocityUpButton.onClick = [this] { if (grid) grid->rampSelectedVelocity(false); };
+    timingEarlierButton.onClick = [this] { if (grid) grid->rotateSelection(-1); };
+    timingResetButton.onClick = [this] { if (grid) grid->thinSelection(); };
+    timingLaterButton.onClick = [this] { if (grid) grid->rotateSelection(1); };
+
     probabilityLabel.setVisible(false);
     probabilitySelector.setVisible(false);
 
@@ -49,9 +87,6 @@ void GgdDrumEditor::updateSelectionPropertyControls()
     if (!grid)
         return;
 
-    // JUCE does not always refresh the closed ComboBox caption when an already
-    // selected item's text changes. Update the item then explicitly reselect the
-    // same ID, but only when the visible caption is actually stale.
     if (auto* layer = processor.mData.getUISeqData()->getLayer(0))
     {
         const int pattern = layer->getCurrentPattern();
@@ -79,6 +114,18 @@ void GgdDrumEditor::updateSelectionPropertyControls()
     flamButton.setVisible(active);
     doubleButton.setVisible(active);
 
+    // updateContextStrip() runs immediately before this function in the editor
+    // timer and still knows these components by their old historic roles. Make
+    // Beta 7's visibility authoritative after that compatibility pass.
+    selectAllButton.setVisible(active);
+    copyButton.setVisible(active);
+    pasteButton.setVisible(active);
+    velocityDownButton.setVisible(active);
+    velocityUpButton.setVisible(active);
+    timingEarlierButton.setVisible(active);
+    timingResetButton.setVisible(active);
+    timingLaterButton.setVisible(active);
+
     const int probability = active ? grid->getSelectedProbability() : -1;
     probability25Button.setToggleState(probability == 25, juce::dontSendNotification);
     probability50Button.setToggleState(probability == 50, juce::dontSendNotification);
@@ -90,6 +137,15 @@ void GgdDrumEditor::updateSelectionPropertyControls()
         juce::String status = juce::String(selected) + (selected == 1 ? " hit" : " hits");
         status += probability >= 0 ? "  P" + juce::String(probability) : "  Pmix";
         selectionStatusLabel.setText(status, juce::dontSendNotification);
+        hintLabel.setText(
+            "Shift-drag velocity | Alt-drag timing | Alt-double-click quantize | A/C/V and arrows stay on keyboard",
+            juce::dontSendNotification);
+    }
+    else if (selectMode)
+    {
+        hintLabel.setText(
+            "Shift-click add/remove | A all | C copy | V paste | arrows move | Alt+arrows duplicate",
+            juce::dontSendNotification);
     }
 }
 

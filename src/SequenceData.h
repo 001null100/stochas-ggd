@@ -25,6 +25,15 @@ Do not add pointers to any of these!
 #include "GgdEventModel.h"
 #include <cstdint>
 
+// Stochas' inherited 14-character pattern-name ceiling is unnecessarily tight
+// for a groove library. Project/pattern persistence stores names as strings, so
+// widening the in-memory buffer is backwards-safe; older builds simply truncate
+// a long Beta 5 name when opened there.
+#ifdef SEQ_PATTERN_NAME_MAXLEN
+#undef SEQ_PATTERN_NAME_MAXLEN
+#endif
+#define SEQ_PATTERN_NAME_MAXLEN 33 // 32 visible characters + terminator
+
 class SequenceData;
 
 #define FIFO_SIZE 16

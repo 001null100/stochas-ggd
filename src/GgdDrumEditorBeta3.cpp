@@ -38,8 +38,6 @@ void GgdDrumEditor::initialiseBeta3Ui()
     flamButton.onClick = [this] { if (grid) grid->createFlamFromSelection(); };
     doubleButton.onClick = [this] { if (grid) grid->createDoubleFromSelection(); };
 
-    // Reserved for a future exact-value property editor. Beta 3 keeps the fast
-    // probability presets visible and avoids another tiny dropdown in the strip.
     probabilityLabel.setVisible(false);
     probabilitySelector.setVisible(false);
 
@@ -50,6 +48,23 @@ void GgdDrumEditor::updateSelectionPropertyControls()
 {
     if (!grid)
         return;
+
+    // JUCE does not always refresh the closed ComboBox caption when an already
+    // selected item's text changes. Update the item then explicitly reselect the
+    // same ID, but only when the visible caption is actually stale.
+    if (auto* layer = processor.mData.getUISeqData()->getLayer(0))
+    {
+        const int pattern = layer->getCurrentPattern();
+        const auto name = juce::String(layer->getPatternName(pattern));
+        const auto caption = name.isNotEmpty() && name != SEQ_DEFAULT_PAT_NAME
+            ? juce::String(pattern + 1) + "  " + name
+            : "Pattern " + juce::String(pattern + 1);
+        if (patternSelector.getText() != caption)
+        {
+            patternSelector.changeItemText(pattern + 1, caption);
+            patternSelector.setSelectedId(pattern + 1, juce::dontSendNotification);
+        }
+    }
 
     const bool selectMode = grid->getToolMode() == GgdDrumGrid::ToolMode::select;
     const int selected = grid->getSelectedCount();

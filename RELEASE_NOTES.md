@@ -1,123 +1,119 @@
-# Stochas GGD v0.2.0-beta.4
+# Stochas GGD v0.2.0-beta.5
 
-Beta 4 is a readability-first visual release built directly on Beta 3. The event scheduler, 960 PPQ pattern model, persistence, MIDI import/export and drum-transform logic are deliberately unchanged. This release concentrates on making the editor easier to parse at a glance and more satisfying to use for long sessions.
+Beta 5 is a focused editor-correctness and workflow release on top of Beta 4. The readability-first theme/timeline system stays intact, while several interactions that felt wrong or unreliable are corrected.
 
-## Shared theme system
+## Hit alignment fixed
 
-Beta 4 introduces four persistent appearance themes:
+Hits were previously painted with their event timestamp at the **centre** of the visual note body. That made every note look half a hit early and caused the first event at tick 0 to be clipped by the left edge.
 
-- **Graphite** — neutral dark teal and the new default baseline.
-- **Midnight** — cool navy with cyan/blue accents.
-- **Ember** — warm charcoal with amber accents.
-- **Contrast** — near-black surfaces with deliberately strong structural separation.
+Beta 5 treats the event timestamp correctly as the **start** of the hit:
 
-Theme selection is stored as a local appearance preference rather than inside project or pattern data. The editor, timeline and Grooves / Patterns browser use the same shared palette instead of maintaining unrelated colour schemes.
+- note bodies extend to the right of the timing marker
+- tick-0 hits are fully visible
+- hover targets use the same left-edge convention
+- move previews follow the corrected geometry
+- bar / beat / subdivision lines remain the timing anchors rather than running through the middle of notes
 
-## Timing hierarchy is now explicit
+This is a rendering/hit-testing correction only; stored event timing is unchanged.
 
-Bar, beat and subdivision lines no longer depend on small brightness variations of one generic border colour. They have dedicated semantic roles that preserve the same hierarchy in every theme:
+## Right-click is always erase in Draw mode
 
-1. **Bar boundaries** are the strongest full-height dividers and use a two-pixel line.
-2. **Beat boundaries** remain full-height but are clearly secondary to bars.
-3. **Primary subdivisions** are quieter editing guides for the active straight or triplet grid.
-4. **Fine subdivisions** are the quietest layer and only appear when the high-resolution grid is active.
+Right-click no longer inherits the old paint/erase toggle based on the currently snapped grid cell.
 
-Alternating bar shading remains intentionally subtle so it supports the structure without competing with hits.
+- right-clicking empty timeline space never paints a note
+- right-clicking an existing hit deletes it
+- right-drag sweeps an eraser across actual event bodies
+- erasing is based on real event positions rather than only the current snap lattice
+- triplet/off-grid events can therefore be erased while a straight grid is active, and vice versa
 
-## Clearer instrument groups
+Left-click retains the existing draw workflow and can still toggle an occupied snapped hit.
 
-Instrument-family separators now read as actual sections rather than slightly different rows.
+## More reliable triplet / dense paint dragging
 
-- Family headers use their own fill and separator colours.
-- A strong top edge and dedicated side rail distinguish headers from articulations.
-- Collapse state uses a clean triangle indicator instead of ASCII `[-]` / `[+]` markers.
-- Ordinary articulation rows retain alternating shading and lighter horizontal separators.
-- The sticky articulation column has a stronger boundary from the timeline so horizontal scrolling never visually merges labels with the grid.
+The old paint drag only visited whichever subdivision happened to be under each sampled mouse event. Fast cursor movement could jump across narrow triplet cells without ever visiting the intermediate snap points.
 
-## Hits, selection and playback
+Beta 5 interpolates every crossed grid position during a paint drag. If the cursor jumps across multiple 1/16T, 1/8T, 1/32 or 1/16 positions between UI events, each crossed subdivision is processed in order rather than silently skipped.
 
-Pattern content, editing state and transport now have separate visual identities.
+The audio/event scheduler is intentionally unchanged in this release. This fixes the concrete editor-side cause found for skipped triplet placement.
 
-- Regular hits gain a restrained accent halo and velocity-dependent body.
-- Ghost notes use a lighter filled/outlined treatment instead of looking like ordinary hits at lower opacity.
-- Selected hits use a dedicated high-contrast selection glow and outline rather than relying on the hit accent.
-- Draw-mode hover targets have a subtle fill plus outline so the pending insertion point is easier to judge.
-- Marquee selection remains translucent but has a stronger readable edge.
-- The playhead now has its own theme role, soft vertical glow, strong centre line and a small ruler marker. It no longer competes with note-hit colour.
+## Click articulation names to audition
 
-The existing smooth playhead interpolation is unchanged.
+The sticky articulation list is now playable.
 
-## More tactile controls
+- click an articulation/instrument row name to send its mapped GGD note
+- release the mouse to send note-off
+- audition follows the currently selected P V / P IV / Modern & Massive destination map
+- the note is emitted through the plugin's existing MIDI output path, so it previews the downstream Kontakt/GGD instrument rather than using an internal sound
 
-Beta 4 adds a shared JUCE look-and-feel for the editor chrome.
+Instrument-family header clicks still collapse/expand the group instead of auditioning.
 
-- Buttons have consistent rounded surfaces, borders and distinct hover / pressed / active states.
-- Toggle buttons make their active state substantially clearer.
-- Combo boxes use the same surface/border language and a cleaner dropdown indicator.
-- The zoom slider has separate background, active track, thumb and hover feedback.
-- Popup menus, text editors and scrollbars follow the selected theme.
-- The two-row performance strip is grouped into two quiet visual shelves instead of floating controls on a flat background.
+## Faster bar-count editing
 
-The goal is feedback that feels responsive without adding animation or decoration that interferes with rhythmic reading.
+The Bars field now selects its entire value when it receives focus. Click it and type a new number to replace the previous count directly, without manually selecting or deleting the old value first.
 
-## Browser visual pass
+## Pattern slot names stay in sync
 
-The Grooves / Patterns browser now follows the active theme and updates immediately when the theme changes.
+Renaming a pattern previously updated the dropdown items but could leave the closed pattern selector showing the old caption.
 
-- Loaded items use a rounded highlight and accent rail.
-- Selected items use a separate quieter outline/fill state.
-- Search fields, tree lines, empty-state text and browser chrome use shared palette roles.
-- Browser header separation and padding are slightly cleaner.
-- Existing indexed live search, folder roots, double-click loading and loaded-file tracking are unchanged.
+Beta 5 refreshes the selected item and reselects the same pattern ID only when its visible caption is stale, so the current slot name updates immediately without disturbing selection state.
 
-## Readable minimum layout
+## Longer pattern names
 
-The minimum editor width is now **1400 px**. Beta 4 intentionally prefers preserving the pattern-name field, theme selector, dedicated browser column and timeline readability rather than allowing the host to compress the interface into a technically valid but poor layout.
+Pattern-name capacity increases from 14 to **32 visible characters**.
 
-## Beta 3 workflow retained
+The inherited fixed-size model buffer has been widened to 33 bytes including the terminator. Project and native pattern persistence already store names as strings, so no serialization version bump is required. Older builds can still open the state but will truncate names back to their older limit.
 
-Everything added in Beta 3 remains available:
+## Cleaner top bar and compact settings
 
-- per-hit probability presets
-- Ghost / Accent velocity actions
-- event-based Flam / Double transforms
-- high-resolution MIDI export
-- indexed Grooves / Patterns filtering
-- the two-row selection/performance strip
-- high-resolution MIDI import
-- native `.sggdp` patterns
-- per-pattern meter and bar count
-- zoom-driven straight/triplet editing resolution
+The standalone `Import MIDI` button has been removed from the visible workflow because MIDI groove loading already belongs in the dedicated Grooves browser.
+
+Its top-bar space is repurposed as a compact `...` Settings control:
+
+- Theme selection now lives in Settings
+- the always-visible theme ComboBox is removed
+- the pattern-name editor gains the freed flexible width
+- top-bar order is now: kit → pattern slot → pattern actions → export → pattern name → settings
+
+The four Beta 4 themes and their persisted appearance preference are unchanged.
+
+## Beta 4 visual hierarchy retained
+
+Beta 5 preserves the readability rules introduced in Beta 4:
+
+1. bar boundaries are strongest
+2. beat boundaries are clearly secondary
+3. primary subdivisions are quieter
+4. fine subdivisions are quietest and only shown at high resolution
+5. instrument-family headers remain visually distinct from articulation rows
+
+The Graphite, Midnight, Ember and Contrast themes all retain those semantic roles.
 
 ## Engine intentionally unchanged
 
-Beta 4 does **not** modify:
+Beta 5 does not modify:
 
 - host-PPQ event scheduling
 - 960 PPQ event storage
-- event duration / probability playback
+- event probability / duration playback
 - transport discontinuity handling
-- project persistence
-- Alpha-to-Beta migration
-- MIDI import translation
-- MIDI export mapping
-- semantic GGD kit mappings
+- MIDI import/export mapping
+- semantic GGD kit maps
+- project persistence format
 - pattern geometry
 - live MIDI passthrough
 
-This is intentionally a visual layer on top of the stable Beta 3 behavior.
+The goal is to correct editor behavior without destabilizing the playback foundation that has remained stable through the previous betas.
 
 ## Current boundaries
 
-- Themes are supplied palettes rather than a full user colour editor.
-- Theme preference is global/local appearance state, not per-project state.
-- MIDI export remains file-based; direct drag-out into Bitwig is still a later feature.
-- Probability has quick presets but no dedicated lane or arbitrary-value editor yet.
+- MIDI export remains file-based; direct MIDI drag-out into Bitwig is still not implemented.
+- Probability still uses quick presets rather than a dedicated lane/arbitrary numeric editor.
 - Experimental GGD Groove Player source pitch 85 remains intentionally unresolved.
+- If already-existing triplet events are found to be skipped specifically during audio playback, that is separate from the paint-drag issue fixed here and should be diagnosed against the scheduler directly rather than guessed at in this UI-focused release.
 
 ## Release-candidate checks
 
-The exact Beta 4 release candidate must compile and package successfully in the Windows PR workflow before merge. The release is complete only when GitHub Releases contains both:
+The exact Beta 5 release candidate must compile and package successfully in the Windows PR workflow before merge. The release is complete only when GitHub Releases contains both:
 
 - `Stochas.GGD.clap`
-- `Stochas-GGD-v0.2.0-beta.4-Windows-x64.zip`
+- `Stochas-GGD-v0.2.0-beta.5-Windows-x64.zip`

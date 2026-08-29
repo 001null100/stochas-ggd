@@ -228,8 +228,16 @@ private:
     void notifyZoomChanged();
     float interpolatedPlayTick() const;
 
+    // Beta 5 keeps the inherited event editing core available under private
+    // compatibility names while replacing the few mouse paths that need
+    // resolution-independent erasing, drag interpolation and row audition.
+    EventRef eventAtLegacy(float x, float y) const;
+    void mouseDownLegacy(const juce::MouseEvent& e);
+    void mouseDragLegacy(const juce::MouseEvent& e);
+    void mouseUpLegacy(const juce::MouseEvent& e);
+
     // Beta 2 compiles the Beta 1 implementation as a compatibility base and
-    // replaces only presentation/playhead methods. These declarations are the
+    // replaces presentation/playhead methods. These declarations are the
     // renamed legacy definitions used by that translation unit.
     void setPlayPositionLegacy(int stepPosition);
     void paintLegacy(juce::Graphics& g);

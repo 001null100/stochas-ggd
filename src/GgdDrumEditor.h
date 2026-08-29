@@ -253,5 +253,11 @@ private:
     void showSettingsDialogLegacy();
     void updatePlayheadFollowLegacy(int playPosition);
 
+    // Final 1.0 wraps the RC implementation so the proven host drag/history
+    // behavior stays intact while configuration and output control can evolve.
+    void initialiseV1UiLegacy();
+    void applyV1InteractionPreferencesLegacy(bool persist);
+    void showSettingsDialogV1Legacy();
+
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(GgdDrumEditor)
 };

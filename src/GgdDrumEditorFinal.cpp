@@ -65,7 +65,7 @@ public:
 
         intensityLabel.setText("Effect strength", juce::dontSendNotification);
         addAndMakeVisible(intensityLabel);
-        intensitySlider.setRange(0.0, 100.0, 1.0);
+        intensitySlider.setRange(0.0, 150.0, 1.0);
         intensitySlider.setValue(effectIntensityPercent, juce::dontSendNotification);
         intensitySlider.setSliderStyle(juce::Slider::LinearHorizontal);
         intensitySlider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 58, 24);
@@ -75,7 +75,7 @@ public:
 
         decayLabel.setText("Effect decay", juce::dontSendNotification);
         addAndMakeVisible(decayLabel);
-        decaySlider.setRange(100.0, 900.0, 10.0);
+        decaySlider.setRange(100.0, 1400.0, 10.0);
         decaySlider.setValue(effectDecayMs, juce::dontSendNotification);
         decaySlider.setSliderStyle(juce::Slider::LinearHorizontal);
         decaySlider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 72, 24);
@@ -136,13 +136,16 @@ public:
 
         auto rightText = right.reduced(18, 14);
         drawSection(g, rightText.removeFromTop(20), "PLAYED NOTE EFFECTS");
-        rightText.removeFromTop(166);
-        rightText.removeFromTop(8);
+        rightText.removeFromTop(230);
+        rightText.removeFromTop(10);
+        g.setColour(ggdThemeColour(GgdThemeRole::borderSoft).withAlpha(0.72f));
+        g.fillRect(rightText.removeFromTop(1));
+        rightText.removeFromTop(10);
         g.setColour(ggdThemeColour(GgdThemeRole::muted));
         g.setFont(10.5f);
         g.drawFittedText(
-            "Feedback is triggered only by notes the sequencer actually schedules after mute and probability decisions. Reduce Motion keeps the feedback static and removes expanding ripples.",
-            rightText.removeFromTop(58), juce::Justification::topLeft, 3);
+            "Effects react only to notes the sequencer actually schedules. Muted and probability-skipped hits stay dark. Reduce Motion keeps the bloom and lane feedback static.",
+            rightText.removeFromTop(64), juce::Justification::topLeft, 3);
     }
 
     void resized() override
@@ -252,8 +255,8 @@ private:
 
     juce::Rectangle<int> panelBounds() const
     {
-        const int width = juce::jmin(820, juce::jmax(720, getWidth() - 120));
-        const int height = juce::jmin(560, juce::jmax(500, getHeight() - 80));
+        const int width = juce::jmin(880, juce::jmax(760, getWidth() - 100));
+        const int height = juce::jmin(590, juce::jmax(520, getHeight() - 60));
         return juce::Rectangle<int>(width, height).withCentre(getLocalBounds().getCentre());
     }
 
@@ -359,7 +362,7 @@ void GgdDrumEditor::initialiseV1Ui()
     importMidiButton.setTooltip("Settings, playback feedback and editor preferences");
     importMidiButton.onClick = [this] { showSettingsDialogV1(); };
 
-    productLabel.setTooltip("Stochas GGD  |  1.0");
+    productLabel.setTooltip("Stochas GGD  |  1.0.1");
     applyV1InteractionPreferences(false);
 }
 
@@ -374,9 +377,9 @@ void GgdDrumEditor::applyV1InteractionPreferences(bool persist)
         appearanceSettings.get(), "playedVelocityReactive", true);
     const bool reduceMotion = prefBool(appearanceSettings.get(), "reduceMotion", false);
     const int intensity = prefInt(
-        appearanceSettings.get(), "playedEffectIntensity", 80, 0, 100);
+        appearanceSettings.get(), "playedEffectIntensity", 100, 0, 150);
     const int decayMs = prefInt(
-        appearanceSettings.get(), "playedEffectDecayMs", 320, 100, 900);
+        appearanceSettings.get(), "playedEffectDecayMs", 420, 100, 1400);
 
     if (auto* finalGrid = dynamic_cast<GgdDrumGridFinal*>(grid.get()))
     {
@@ -406,8 +409,8 @@ void GgdDrumEditor::showSettingsDialogV1()
     const bool laneFlash = prefBool(prefs, "playedLaneFlash", true);
     const bool velocityReactive = prefBool(prefs, "playedVelocityReactive", true);
     const bool reduceMotion = prefBool(prefs, "reduceMotion", false);
-    const int intensity = prefInt(prefs, "playedEffectIntensity", 80, 0, 100);
-    const int decayMs = prefInt(prefs, "playedEffectDecayMs", 320, 100, 900);
+    const int intensity = prefInt(prefs, "playedEffectIntensity", 100, 0, 150);
+    const int decayMs = prefInt(prefs, "playedEffectDecayMs", 420, 100, 1400);
 
     auto safe = juce::Component::SafePointer<GgdDrumEditor>(this);
     auto change = [safe](int themeIndex,
@@ -450,9 +453,9 @@ void GgdDrumEditor::showSettingsDialogV1()
                 "playedVelocityReactive", velocityReactiveEffects ? 1 : 0);
             settings->setValue("reduceMotion", shouldReduceMotion ? 1 : 0);
             settings->setValue(
-                "playedEffectIntensity", juce::jlimit(0, 100, effectIntensity));
+                "playedEffectIntensity", juce::jlimit(0, 150, effectIntensity));
             settings->setValue(
-                "playedEffectDecayMs", juce::jlimit(100, 900, effectDecay));
+                "playedEffectDecayMs", juce::jlimit(100, 1400, effectDecay));
             settings->saveIfNeeded();
         }
 

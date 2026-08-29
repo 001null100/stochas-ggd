@@ -143,14 +143,29 @@ bool GgdDrumGridV1::activeMapLayoutNeedsRefresh() const
         return false;
 
     int expectedRows = 0;
+    int expectedHeaders = 0;
     for (const auto& group : map->groups)
-        expectedRows += group.articulations.size();
+    {
+        ++expectedHeaders;
+        if (collapsedGroups.count(group.id) == 0)
+            expectedRows += group.articulations.size();
+    }
 
     int actualRows = 0;
+    int actualHeaders = 0;
+    int expectedGroupIndex = 0;
     for (const auto& item : layout)
     {
         if (item.header)
+        {
+            ++actualHeaders;
+            if (expectedGroupIndex >= map->groups.size()
+                || item.groupId != map->groups.getReference(expectedGroupIndex).id)
+                return true;
+            ++expectedGroupIndex;
             continue;
+        }
+
         ++actualRows;
         if (item.canonicalRow < 0 || item.canonicalRow >= canonicalRows.size())
             return true;
@@ -158,7 +173,7 @@ bool GgdDrumGridV1::activeMapLayoutNeedsRefresh() const
             return true;
     }
 
-    return actualRows != expectedRows;
+    return actualRows != expectedRows || actualHeaders != expectedHeaders;
 }
 
 void GgdDrumGridV1::rebuildActiveMapLayout()

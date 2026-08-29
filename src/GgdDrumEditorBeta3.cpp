@@ -38,8 +38,6 @@ void GgdDrumEditor::initialiseBeta3Ui()
     flamButton.onClick = [this] { if (grid) grid->createFlamFromSelection(); };
     doubleButton.onClick = [this] { if (grid) grid->createDoubleFromSelection(); };
 
-    // Reserved for a future exact-value property editor. Beta 3 keeps the fast
-    // probability presets visible and avoids another tiny dropdown in the strip.
     probabilityLabel.setVisible(false);
     probabilitySelector.setVisible(false);
 
@@ -50,6 +48,47 @@ void GgdDrumEditor::updateSelectionPropertyControls()
 {
     if (!grid)
         return;
+
+    // JUCE does not always refresh the closed ComboBox caption when an already
+    // selected item's text changes. Keep the active slot caption explicitly in
+    // sync with the underlying pattern name.
+    if (auto* layer = processor.mData.getUISeqData()->getLayer(0))
+    {
+        const int pattern = layer->getCurrentPattern();
+        const auto name = juce::String(layer->getPatternName(pattern));
+        const auto caption = name.isNotEmpty() && name != SEQ_DEFAULT_PAT_NAME
+            ? juce::String(pattern + 1) + "  " + name
+            : "Pattern " + juce::String(pattern + 1);
+        if (patternSelector.getText() != caption)
+            patternSelector.setText(caption, juce::dontSendNotification);
+    }
+
+    // Beta 5 turns the redundant standalone Import MIDI button into a compact
+    // settings control and removes the always-visible theme selector. Reapply
+    // the compact bounds here after host resizes, since the inherited shell owns
+    // the main resized() implementation.
+    if (beta4UiInitialised)
+    {
+        const int gap = 7;
+        const int editorWidth = juce::jmax(780, getWidth() - browserWidth);
+        const int y = 12;
+        const int h = 33;
+        const int settingsW = 34;
+
+        auto patternBounds = patternSelector.getBounds();
+        patternSelector.setBounds(patternBounds.getX(), y, 156, h);
+        patternActionsButton.setBounds(patternSelector.getRight() + gap, y, 76, h);
+        exportMidiButton.setBounds(patternActionsButton.getRight() + gap, y, 88, h);
+
+        const int settingsX = editorWidth - 12 - settingsW;
+        importMidiButton.setBounds(settingsX, y, settingsW, h);
+        const int nameX = exportMidiButton.getRight() + gap;
+        patternName.setBounds(nameX, y,
+                              juce::jmax(90, settingsX - gap - nameX), h);
+
+        themeSelector.setBounds({});
+        themeSelector.setVisible(false);
+    }
 
     const bool selectMode = grid->getToolMode() == GgdDrumGrid::ToolMode::select;
     const int selected = grid->getSelectedCount();

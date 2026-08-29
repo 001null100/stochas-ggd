@@ -16,6 +16,11 @@
 #include <bitset>
 
 class StochaEngine {
+   // PluginProcessorGgd.cpp compiles the original processor block as a dormant
+   // fallback. That inherited code references the engine's inherited scheduler,
+   // which intentionally remains private to normal callers.
+   friend class SeqAudioProcessor;
+
    typedef std::bitset<SEQ_MAX_ROWS> DepSource;
    DepSource mDependencySource[SEQ_MAX_STEPS];
 

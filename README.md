@@ -28,19 +28,23 @@ The plugin is currently developed and tested primarily as a **CLAP note effect i
 - Smooth interpolated playhead and host transport sync.
 - Live MIDI passthrough so the instrument remains playable through the note effect.
 - Semantic drum rows that are translated through the active GGD kit map.
+- Click an articulation/instrument name to audition its mapped note through the downstream GGD instrument.
 - High-resolution GGD MIDI groove import with velocity and performance timing retained.
 - Native `.sggdp` semantic pattern files that remain portable between supported GGD libraries.
 - Grooves and Patterns browser with persistent roots, loaded-item indication and live filtering.
 - Draw and Select tools, marquee selection, copy/paste, move, duplicate, nudge, velocity and timing editing.
+- Draw-mode right-click erasing that can target off-grid/triplet hits regardless of the current snap mode.
+- Interpolated paint-drag so fast mouse movement cannot silently jump over intermediate subdivisions.
 - Ghost, Accent, Humanize, Quantize, Flam and Double performance actions.
 - Per-hit probability editing.
 - High-resolution MIDI export through the active destination kit mapping.
+- Pattern names up to 32 visible characters.
 - Undo/redo for pattern editing.
 - Four persistent UI themes with a shared readability-first timing hierarchy.
 
 ## Appearance and timeline hierarchy
 
-Beta 4 treats timing hierarchy as part of the editor model rather than incidental decoration. Every theme has dedicated semantic colours for:
+The editor treats timing hierarchy as part of the visual model rather than incidental decoration. Every theme has dedicated semantic colours for:
 
 1. **Bar boundaries**: strongest, full-height dividers.
 2. **Beat boundaries**: full-height but clearly secondary.
@@ -57,7 +61,7 @@ Current themes:
 - **Ember**: warm dark amber.
 - **Contrast**: maximum separation for low-light and accessibility-focused use.
 
-Theme choice is stored locally as an appearance preference and does not alter project or pattern data.
+Theme choice is stored locally as an appearance preference and does not alter project or pattern data. Theme selection lives in the compact `...` Settings menu at the right edge of the top bar.
 
 ## Built-in GGD mappings
 
@@ -74,9 +78,9 @@ Patterns are stored semantically. A kick event is a kick articulation, not merel
 1. Put `Stochas.GGD.clap` somewhere Bitwig scans for CLAP plugins.
 2. Add Stochas GGD as a **Note FX** device before Kontakt / your GGD instrument.
 3. Choose the matching GGD kit mapping in the plugin.
-4. Draw or import a groove and start playback.
+4. Draw or load a groove from the Grooves browser and start playback.
 
-The plugin outputs MIDI notes to the downstream instrument and passes live controller MIDI through.
+The plugin outputs MIDI notes to the downstream instrument and passes live controller MIDI through. Clicking an articulation name in the sticky left column also sends that mapped note for quick auditioning.
 
 ## Pattern and groove libraries
 
@@ -86,6 +90,16 @@ The right-side browser has separate roots for:
 - **Patterns:** Stochas GGD `.sggdp` files
 
 Folder locations are remembered locally. Double-click a file to load it. The filter field searches filenames and relative folder paths; clearing the filter returns to the normal collapsible folder tree. The browser follows the active UI theme and keeps loaded and selected rows visually distinct.
+
+The dedicated top-bar Import MIDI button was removed in Beta 5 because the Grooves browser already owns this workflow.
+
+## Editing workflow
+
+In **Draw** mode, left-click places a hit on the current grid. Dragging paints every crossed subdivision even when the cursor moves faster than the UI event rate. Right-click is always destructive: click or drag over hits to erase them. Right-click hit-testing follows actual event bodies, so a triplet can be erased while a straight grid is selected and vice versa.
+
+Hit bodies begin immediately to the right of their timing marker. The marker represents the event start, so the first hit at tick 0 is fully visible rather than being clipped against the left edge.
+
+The Bars field selects its complete value when focused, making bar-count replacement a click-and-type operation.
 
 ## MIDI import and export
 
@@ -100,6 +114,8 @@ MIDI export performs the reverse destination step using the currently selected G
 Stochas GGD is intentionally a sequencer/note effect. It does **not** contain an internal sampler, mixer, effects rack or song arranger; Kontakt/GGD and Bitwig already do those jobs better.
 
 A rare experimental GGD Groove Player source pitch (`85`) remains intentionally unresolved rather than being assigned to an uncertain semantic articulation.
+
+MIDI export is currently file-based. Direct drag-out of a generated MIDI clip into Bitwig is not implemented yet.
 
 The project is still in beta, so project-state compatibility and editor workflows should be treated as evolving until the first stable release.
 

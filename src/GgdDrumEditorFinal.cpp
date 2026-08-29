@@ -325,7 +325,7 @@ void GgdDrumEditor::initialiseV1Ui()
 
     auto syncOutputButton = [this]
     {
-        const auto* layer = processor.mData.getUISeqData()->getLayer(0);
+        auto* layer = processor.mData.getUISeqData()->getLayer(0);
         const bool enabled = layer != nullptr && !layer->getMuted();
         clearButton.setToggleState(enabled, juce::dontSendNotification);
         clearButton.setButtonText(enabled ? "SEQ ON" : "SEQ OFF");
@@ -342,7 +342,7 @@ void GgdDrumEditor::initialiseV1Ui()
         layer->setMuted(!enable);
         publishModelChange(false);
 
-        const auto* updated = processor.mData.getUISeqData()->getLayer(0);
+        auto* updated = processor.mData.getUISeqData()->getLayer(0);
         const bool nowEnabled = updated != nullptr && !updated->getMuted();
         clearButton.setToggleState(nowEnabled, juce::dontSendNotification);
         clearButton.setButtonText(nowEnabled ? "SEQ ON" : "SEQ OFF");

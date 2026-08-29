@@ -137,7 +137,7 @@ class SeqPlaybackParameter : public AudioProcessorParameter {
    virtual String getName(int) const override { return "playback";}
    // label string for units ie "%"
    virtual String getLabel() const override {return String(); }
-   // should return a string representing the value
+   // should return the default value for the parameter (0.0 always)
    bool isAutomatable() const override { return true; }
 public:
    explicit SeqPlaybackParameter(SeqAudioProcessor *parent) :
@@ -205,6 +205,7 @@ class SeqAudioProcessor  : public AudioProcessor, public SeqProcessorNotifierHel
        int8_t mType;     // SEQ_MIDI_NOTEON or OFF
        int8_t mChannel;  // 1 based channel
        int8_t mValue;       // one of SEQMIDI_VALUE_PLAYBACK_*** or 0 if inactive
+       MiniMidiMapItem() : mNext(nullptr), mType(0), mChannel(0), mValue(0) {}
     };
     MiniMidiMapItem *mMiniMidiMap[128]; // can't have more than start/stop/toggle
     void resetMiniMidiMap();
@@ -292,6 +293,15 @@ public:
 
    // Inherited via SeqProcessorNotifierHelper
    virtual bool getStepPlayedState(int layer, int position, int notenum) override;
+
+   // Pop one event that was actually scheduled by the GGD event engine. This is
+   // a lock-free audio-thread -> UI-thread feedback path used only for visual
+   // playback effects; it never participates in scheduling or project state.
+   bool popGgdPlayedEvent(int layer, int *row, int *tick, int *velocity) {
+      if (layer < 0 || layer >= SEQ_MAX_LAYERS)
+         return false;
+      return mStocha[layer].popPlayedEvent(row, tick, velocity);
+   }
 
 
    // Inherited via AutParamNotify

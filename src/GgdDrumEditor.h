@@ -13,8 +13,6 @@
 #include <deque>
 #include <optional>
 
-// The inherited constants use a separate menu item ID (2) and model value (0)
-// for "MIDI respond: no". The drum editor writes the model directly.
 #ifdef SEQCTL_MIDI_RESPOND_NO
 #undef SEQCTL_MIDI_RESPOND_NO
 #define SEQCTL_MIDI_RESPOND_NO SEQ_MIDI_RESPOND_NO
@@ -50,15 +48,14 @@ private:
     bool beta4UiInitialised = false;
     bool beta6UiInitialised = false;
 
-    // Local editor preferences. These belong to the user's workstation rather
-    // than project state and are persisted in the same PropertiesFile as theme.
     bool followPlayhead = true;
     bool smoothPlayhead = true;
     bool playheadGlow = true;
     bool autoFineGrid = true;
-    int followMarginPercent = 8;
+    int followMarginPercent = 8; // retained only for Beta 6 preference migration
     int followScrollTargetX = -1;
     float lastFollowPlayheadX = -1.0f;
+    int followBaseGridWidth = -1;
 
     juce::Label productLabel;
     juce::Label transportStatus;
@@ -67,7 +64,7 @@ private:
     juce::Label meterLabel;
     juce::Label meterSlash;
     juce::Label barsLabel;
-    juce::Label gridLabel;       // Beta 1 compatibility; hidden by Beta 2.
+    juce::Label gridLabel;
     juce::Label zoomLabel;
     juce::Label zoomValueLabel;
     juce::Label probabilityLabel;
@@ -75,7 +72,7 @@ private:
     juce::ComboBox patternSelector;
     juce::ComboBox numeratorSelector;
     juce::ComboBox denominatorSelector;
-    juce::ComboBox gridSelector; // Beta 1 compatibility; hidden by Beta 2.
+    juce::ComboBox gridSelector;
     juce::ComboBox probabilitySelector;
     juce::ComboBox themeSelector;
     juce::TextEditor barsEditor;
@@ -194,12 +191,16 @@ private:
                                  int& numerator,
                                  int& denominator) const;
 
-    // Beta 2 keeps Beta 1's event-aware editor implementation as a compatibility
-    // base and replaces only the shell/presentation methods below.
     void paintLegacy(juce::Graphics& g);
     void resizedLegacy();
     bool keyPressedLegacy(const juce::KeyPress& key);
     void timerCallbackLegacy();
+
+    // Beta 7 compiles Beta 6 as a compatibility layer and replaces only the
+    // settings entry point and playhead-follow policy.
+    void initialiseBeta6UiLegacy();
+    void showSettingsDialogLegacy();
+    void updatePlayheadFollowLegacy(int playPosition);
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(GgdDrumEditor)
 };

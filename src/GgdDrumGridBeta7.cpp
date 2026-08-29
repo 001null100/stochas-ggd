@@ -23,9 +23,6 @@ int wrapPositive(int value, int modulus)
 }
 }
 
-// GgdDrumGrid declares mouseDoubleClick so its vtable remains complete even
-// when a host constructs the base grid directly. Beta 7's actual behavior lives
-// in the derived interaction wrapper below.
 void GgdDrumGrid::mouseDoubleClick(const juce::MouseEvent&)
 {
 }
@@ -77,8 +74,8 @@ void GgdDrumGrid::paintValuePopup(juce::Graphics& g)
         return;
 
     const juce::String text = valuePopupKind == ValuePopupKind::velocity
-        ? "VEL " + juce::String(valuePopupValue)
-        : "TIME " + (valuePopupValue > 0 ? "+" : "")
+        ? juce::String("VEL ") + juce::String(valuePopupValue)
+        : juce::String("TIME ") + (valuePopupValue > 0 ? "+" : "")
             + juce::String(valuePopupValue) + "t";
 
     const float centreX = visualHitCenterX(valuePopupRef.tick);
@@ -175,7 +172,6 @@ void GgdDrumGrid::repeatSelection()
     if (created.empty())
         return;
 
-    // Selecting the new copy makes repeated presses chain the phrase forward.
     selection = std::move(created);
     publishChange();
 }
@@ -354,9 +350,6 @@ void GgdDrumGridBeta7::paint(juce::Graphics& g)
 
 void GgdDrumGridBeta7::mouseDown(const juce::MouseEvent& e)
 {
-    // In Select mode, preserve Shift-click selection toggling while reserving
-    // Shift-drag for velocity. We wait for actual pointer movement before
-    // deciding which gesture the user intended.
     if (toolMode == ToolMode::select
         && e.mods.isShiftDown()
         && !e.mods.isAltDown()

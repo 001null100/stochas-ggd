@@ -110,9 +110,6 @@ void GgdDrumEditor::paint(juce::Graphics& g)
 {
     g.fillAll(ui(GgdThemeRole::background));
 
-    // Two subtle header shelves make the toolbar scannable without turning it
-    // into a pile of unrelated boxes. Controls themselves retain generous dark
-    // negative space, while the timing/editor region owns the brightest accent.
     juce::ColourGradient header(
         ui(GgdThemeRole::panelRaised), 0.0f, 0.0f,
         ui(GgdThemeRole::panel), 0.0f, static_cast<float>(topAreaHeight), false);
@@ -130,8 +127,6 @@ void GgdDrumEditor::paint(juce::Graphics& g)
     g.setColour(ui(GgdThemeRole::panel));
     g.fillRect(0, stripY, editorWidth, bottomAreaHeight);
 
-    // Two action lanes are visually grouped but not boxed around every button.
-    // This keeps the strip readable when many selection tools are visible.
     g.setColour(ui(GgdThemeRole::panelRaised).withAlpha(0.55f));
     g.fillRoundedRectangle(7.0f, static_cast<float>(stripY + 4),
                            static_cast<float>(editorWidth - 14), 29.0f, 5.0f);
@@ -141,8 +136,6 @@ void GgdDrumEditor::paint(juce::Graphics& g)
     g.setColour(ui(GgdThemeRole::border).withAlpha(0.90f));
     g.drawHorizontalLine(stripY, 0.0f, static_cast<float>(editorWidth));
 
-    // The browser owns a real visual column. A strong edge prevents the tree
-    // and timeline from visually bleeding together at low brightness.
     g.setColour(ui(GgdThemeRole::borderStrong).withAlpha(0.58f));
     g.fillRect(editorWidth - 1, topAreaHeight, 1,
                juce::jmax(0, getHeight() - topAreaHeight));
@@ -164,21 +157,22 @@ void GgdDrumEditor::resized()
     first.removeFromLeft(gap + 2);
     kitSelector.setBounds(first.removeFromLeft(180).reduced(0, 5));
     first.removeFromLeft(gap);
-    patternSelector.setBounds(first.removeFromLeft(126).reduced(0, 5));
+    patternSelector.setBounds(first.removeFromLeft(156).reduced(0, 5));
     first.removeFromLeft(gap);
     patternActionsButton.setBounds(first.removeFromLeft(76).reduced(0, 5));
     first.removeFromLeft(gap);
-    importMidiButton.setBounds(first.removeFromLeft(86).reduced(0, 5));
-    first.removeFromLeft(5);
     exportMidiButton.setBounds(first.removeFromLeft(88).reduced(0, 5));
     first.removeFromLeft(gap);
 
-    // Appearance is global rather than pattern-level, so keep it at the far
-    // right and let the pattern name consume the remaining flexible width.
-    auto themeArea = first.removeFromRight(112);
-    themeSelector.setBounds(themeArea.reduced(0, 5));
+    // Beta 5 moves appearance into a compact settings menu and gives the freed
+    // space to pattern names. The old Import MIDI component is repurposed as
+    // that settings control; groove import remains in the dedicated browser.
+    auto settingsArea = first.removeFromRight(34);
+    importMidiButton.setBounds(settingsArea.reduced(0, 5));
     first.removeFromRight(gap);
     patternName.setBounds(first.reduced(0, 5));
+    themeSelector.setBounds({});
+    themeSelector.setVisible(false);
 
     auto second = juce::Rectangle<int>(pad, 60, editorWidth - pad * 2, 43);
 
@@ -215,8 +209,6 @@ void GgdDrumEditor::resized()
     second.removeFromRight(5);
     zoomSlider.setBounds(second.reduced(0, 7));
 
-    // Keep Beta 1's explicit resolution widgets out of the layout. Resolution
-    // is a zoom-derived property with one Triplet-mode toggle.
     gridLabel.setBounds({});
     gridSelector.setBounds({});
     gridLabel.setVisible(false);
@@ -336,7 +328,5 @@ void GgdDrumEditor::timerCallback()
     updateContextStrip();
     updateSelectionPropertyControls();
 
-    // The interpolated playhead advances between notifier steps, so it needs a
-    // repaint every timer frame even when the host notification did not change.
     grid->repaint();
 }

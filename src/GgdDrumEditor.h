@@ -11,7 +11,11 @@
 #include <array>
 #include <cstdint>
 #include <deque>
+#include <functional>
 #include <optional>
+#include <unordered_map>
+#include <utility>
+#include <vector>
 
 #ifdef SEQCTL_MIDI_RESPOND_NO
 #undef SEQCTL_MIDI_RESPOND_NO
@@ -19,6 +23,39 @@
 #endif
 
 class GgdDrumGrid;
+
+class GgdMidiDragButton final : public juce::TextButton
+{
+public:
+    using juce::TextButton::TextButton;
+
+    std::function<void(juce::Component*)> onBeginDrag;
+
+    void mouseDown(const juce::MouseEvent& e) override
+    {
+        dragStarted = false;
+        juce::TextButton::mouseDown(e);
+    }
+
+    void mouseDrag(const juce::MouseEvent& e) override
+    {
+        if (!dragStarted && e.getDistanceFromDragStart() >= 5)
+        {
+            dragStarted = true;
+            if (onBeginDrag)
+                onBeginDrag(this);
+        }
+    }
+
+    void mouseUp(const juce::MouseEvent& e) override
+    {
+        juce::TextButton::mouseUp(e);
+        dragStarted = false;
+    }
+
+private:
+    bool dragStarted = false;
+};
 
 class GgdDrumEditor : public juce::AudioProcessorEditor,
                       private juce::Timer
@@ -47,11 +84,14 @@ private:
     bool beta3UiInitialised = false;
     bool beta4UiInitialised = false;
     bool beta6UiInitialised = false;
+    bool v1UiInitialised = false;
 
     bool followPlayhead = true;
     bool smoothPlayhead = true;
     bool playheadGlow = true;
     bool autoFineGrid = true;
+    bool shiftHoverVelocityInspector = true;
+    bool articulationAudition = true;
     int followMarginPercent = 8; // retained only for Beta 6 preference migration
     int followScrollTargetX = -1;
     float lastFollowPlayheadX = -1.0f;
@@ -83,7 +123,7 @@ private:
     juce::TextButton redoButton { "Redo" };
     juce::TextButton clearButton { "Clear" };
     juce::TextButton importMidiButton { "Import MIDI" };
-    juce::TextButton exportMidiButton { "Export MIDI" };
+    GgdMidiDragButton exportMidiButton { "Drag MIDI" };
     juce::TextButton tripletModeButton { "Triplet" };
     juce::TextButton fitZoomButton { "125%" };
     juce::TextButton selectAllButton { "All" };
@@ -114,10 +154,12 @@ private:
     std::unique_ptr<juce::FileChooser> midiFileChooser;
     std::unique_ptr<juce::FileChooser> midiExportChooser;
     std::unique_ptr<juce::FileChooser> patternSaveChooser;
+    juce::File midiDragTempFile;
 
     std::deque<GgdPatternSnapshot> undoHistory;
     std::deque<GgdPatternSnapshot> redoHistory;
     std::optional<GgdPatternSnapshot> lastCommittedSnapshot;
+    std::unordered_map<std::uint64_t, std::vector<std::pair<int, int>>> selectionByFingerprint;
     std::array<std::uint64_t, SEQ_MAX_PATTERNS> cleanPatternFingerprints {};
     std::array<bool, SEQ_MAX_PATTERNS> cleanPatternFingerprintValid {};
     bool restoringHistory = false;
@@ -148,12 +190,16 @@ private:
     void initialiseBeta3Ui();
     void initialiseBeta4Ui();
     void initialiseBeta6Ui();
+    void initialiseV1Ui();
     void applyBeta4Theme(GgdThemeId theme, bool persist);
     void applyBeta6Preferences(bool persist);
+    void applyV1InteractionPreferences(bool persist);
     void showSettingsDialog();
+    void showSettingsDialogV1();
     void closeSettingsDialog();
     void updatePlayheadFollow(int playPosition);
     void updateSelectionPropertyControls();
+    void handleGridSelectionChangedV1();
 
     GgdPatternSnapshot capturePattern(int pattern) const;
     GgdPatternSnapshot captureCurrentPattern() const;
@@ -165,11 +211,15 @@ private:
     bool currentPatternHasChanges() const;
     void performUndo();
     void performRedo();
+    void performUndoV1();
+    void performRedoV1();
+    void rememberCurrentSelectionV1();
 
     void chooseMidiFile();
     void importMidiFile(const juce::File& file);
     void applyMidiImport(const GgdMidiImportResult& result, const juce::File& sourceFile);
     void exportCurrentPatternMidi();
+    void beginMidiDragV1(juce::Component* source);
     void requestLoadGroove(const juce::File& file);
     void requestLoadPattern(const juce::File& file);
     void applyPatternFile(const juce::File& file, const GgdPatternSnapshot& snapshot);
@@ -178,6 +228,7 @@ private:
                                    std::function<void()> replacement);
 
     void showPatternActions();
+    void showPatternActionsV1();
     void duplicateCurrentPatternSlot();
     bool currentPatternSlotIsEmpty(int pattern) const;
     void updateContextStrip();

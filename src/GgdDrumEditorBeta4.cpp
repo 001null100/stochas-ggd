@@ -34,30 +34,51 @@ void GgdDrumEditor::initialiseBeta4Ui()
     themeSelector.setSelectedId(ggdThemeIndex(ggdCurrentTheme()) + 1,
                                 juce::dontSendNotification);
     themeSelector.setMouseClickGrabsKeyboardFocus(false);
-    themeSelector.setTooltip("UI theme. All themes preserve the same bar, beat, subdivision and instrument-group hierarchy.");
-    themeSelector.onChange = [this]
+    themeSelector.setVisible(false);
+
+    // The standalone Import MIDI button duplicated the Grooves browser. Reuse
+    // that stable control slot as a compact settings menu instead of adding more
+    // permanent chrome to the top bar.
+    importMidiButton.setButtonText("...");
+    importMidiButton.setMouseClickGrabsKeyboardFocus(false);
+    importMidiButton.setTooltip("Settings");
+    importMidiButton.onClick = [this]
     {
-        const int index = themeSelector.getSelectedId() - 1;
-        if (index >= 0)
-            applyBeta4Theme(ggdThemeFromIndex(index), true);
-        if (grid)
-            grid->grabKeyboardFocus();
+        juce::PopupMenu menu;
+        menu.addSectionHeader("Theme");
+        for (int i = 0; i < static_cast<int>(GgdThemeId::count); ++i)
+        {
+            const auto theme = ggdThemeFromIndex(i);
+            menu.addItem(100 + i, ggdThemeName(theme), true,
+                         theme == ggdCurrentTheme());
+        }
+
+        auto safe = juce::Component::SafePointer<GgdDrumEditor>(this);
+        menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(importMidiButton),
+            [safe](int result)
+            {
+                if (auto* self = safe.getComponent())
+                {
+                    if (result >= 100 && result < 100 + static_cast<int>(GgdThemeId::count))
+                        self->applyBeta4Theme(ggdThemeFromIndex(result - 100), true);
+                    if (self->grid)
+                        self->grid->grabKeyboardFocus();
+                }
+            });
     };
-    addAndMakeVisible(themeSelector);
+
+    // One click selects the entire bar count. Typing immediately replaces the
+    // old value instead of requiring a manual Ctrl+A or backspace first.
+    barsEditor.setSelectAllWhenFocused(true);
 
     productLabel.setText("STOCHAS GGD", juce::dontSendNotification);
     productLabel.setFont(juce::Font(17.5f, juce::Font::bold));
-    productLabel.setTooltip("Stochas GGD  |  Beta 4");
+    productLabel.setTooltip("Stochas GGD  |  Beta 5");
 
-    // Beta 4 prefers a readable layout over technically supporting a width at
-    // which the pattern name and global appearance controls become cramped.
     setResizeLimits(1400, 640, 2200, 1500);
     if (getWidth() < 1400)
         setSize(juce::jmax(1480, getWidth()), juce::jmax(820, getHeight()));
 
-    // Keep controls tactile without becoming visually noisy. The custom look
-    // and feel handles hover/down/toggle states; these tooltips clarify the few
-    // less-obvious performance actions without adding permanent labels.
     drawModeButton.setTooltip("Draw hits (D)");
     selectModeButton.setTooltip("Select and transform hits (S)");
     timingResetButton.setTooltip("Quantize selected hits to the visible grid");
@@ -102,8 +123,6 @@ void GgdDrumEditor::applyBeta4Theme(GgdThemeId theme, bool persist)
         appearanceSettings->saveIfNeeded();
     }
 
-    // The palette is global to the plugin UI, so a single theme switch updates
-    // all paint paths without rebuilding model state or touching the scheduler.
     sendLookAndFeelChange();
     if (grid)
         grid->repaint();

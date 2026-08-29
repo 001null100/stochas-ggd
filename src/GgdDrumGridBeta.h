@@ -79,6 +79,8 @@ public:
                         const juce::MouseWheelDetails& wheel) override;
 
 private:
+    friend class GgdDrumGridBeta7;
+
     struct LayoutItem
     {
         bool header = false;

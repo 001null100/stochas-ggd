@@ -94,8 +94,9 @@ include_directories(src)
 target_include_directories(stochas PRIVATE "${CMAKE_BINARY_DIR}/geninclude")
 juce_generate_juce_header(stochas)
 
-# Final 1.0 keeps the established event scheduler and RC drag/history layers,
-# adding only isolated stabilization, output control and UI playback feedback.
+# The 1.x line keeps the established event scheduler and editor layers. The
+# processor wrapper preserves the inherited block implementation while adding
+# host bar-origin normalization for odd-meter / preroll transport alignment.
 target_sources(stochas PRIVATE
     src/EditorState.cpp
     src/GgdDrumEditorBeta7Shell.cpp
@@ -120,7 +121,7 @@ target_sources(stochas PRIVATE
     src/GgdKitMap.cpp
     src/pcg_basic.c
     src/PersistBeta.cpp
-    src/PluginProcessor.cpp
+    src/PluginProcessorGgd.cpp
     src/Scale.cpp
     src/SeqRandom.cpp
     src/SequenceData.cpp

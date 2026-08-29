@@ -91,7 +91,7 @@ class SeqAudioProcessorParameter : public AudioProcessorParameter {
    // should return a string representing the value
    virtual String getText(float value, int) const override;
 
-   // should parse string and return value for it
+   // should parse string to value
    virtual float getValueForText(const String & text) const override;
 
    bool isAutomatable() const override { return true; }
@@ -166,6 +166,9 @@ class SeqAudioProcessor  : public AudioProcessor, public SeqProcessorNotifierHel
     bool isBusesLayoutSupported(const BusesLayout& layouts) const override;
    #endif
     void processBlock (AudioSampleBuffer&, MidiBuffer&) override;
+    // The GGD transport wrapper compiles the inherited implementation under
+    // this name, then supplies a bar-origin-aware processBlock override.
+    void processLegacyBlock (AudioSampleBuffer&, MidiBuffer&);
     AudioProcessorEditor* createEditor() override;
     bool hasEditor() const override;
     const String getName() const override;

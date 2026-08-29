@@ -98,11 +98,17 @@ public:
         content.removeFromTop(12);
 
         drawSection(g, content.removeFromTop(22), "APPEARANCE");
-        content.removeFromTop(54);
+        auto themeRow = content.removeFromTop(54);
+        drawSettingLabel(g, themeRow.removeFromLeft(180), "Theme");
         content.removeFromTop(10);
+
         drawSection(g, content.removeFromTop(22), "PLAYBACK & PLAYHEAD");
-        content.removeFromTop(151);
+        auto playbackRows = content.removeFromTop(151);
+        playbackRows.removeFromTop(93);
+        auto marginRow = playbackRows.removeFromTop(40);
+        drawSettingLabel(g, marginRow.removeFromLeft(190), "Follow edge margin");
         content.removeFromTop(10);
+
         drawSection(g, content.removeFromTop(22), "EDITING");
     }
 
@@ -167,6 +173,15 @@ private:
     {
         g.setColour(ggdThemeColour(GgdThemeRole::accentSecondary));
         g.setFont(juce::Font(10.5f, juce::Font::bold));
+        g.drawText(title, bounds, juce::Justification::centredLeft, false);
+    }
+
+    void drawSettingLabel(juce::Graphics& g,
+                          juce::Rectangle<int> bounds,
+                          const juce::String& title)
+    {
+        g.setColour(ggdThemeColour(GgdThemeRole::text).withAlpha(0.92f));
+        g.setFont(12.0f);
         g.drawText(title, bounds, juce::Justification::centredLeft, false);
     }
 

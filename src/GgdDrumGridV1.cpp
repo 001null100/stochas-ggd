@@ -143,9 +143,8 @@ bool GgdDrumGridV1::activeMapLayoutNeedsRefresh() const
         return false;
 
     int expectedRows = 0;
-    for (int row = 0; row < canonicalRows.size(); ++row)
-        if (map->findArticulation(canonicalRows.getReference(row).semanticId) != nullptr)
-            ++expectedRows;
+    for (const auto& group : map->groups)
+        expectedRows += group.articulations.size();
 
     int actualRows = 0;
     for (const auto& item : layout)
@@ -166,69 +165,88 @@ void GgdDrumGridV1::rebuildActiveMapLayout()
 {
     layout.clear();
     int y = rulerHeight;
-    juce::String currentGroup;
 
-    for (int row = 0; row < canonicalRows.size(); ++row)
+    if (map != nullptr)
     {
-        const auto& canonical = canonicalRows.getReference(row);
-        const GgdGroup* activeGroup = nullptr;
-        const GgdArticulation* articulation = nullptr;
-
-        if (map != nullptr)
+        // The visible layout belongs to the active library, not to the union of
+        // every library. Resolve each active semantic articulation back to its
+        // stable canonical row so storage/persistence remain unchanged while
+        // group order and labels exactly match P V, P IV or Modern & Massive.
+        for (const auto& group : map->groups)
         {
-            for (const auto& group : map->groups)
-            {
-                for (const auto& candidate : group.articulations)
-                {
-                    if (candidate.semanticId == canonical.semanticId)
-                    {
-                        activeGroup = &group;
-                        articulation = &candidate;
-                        break;
-                    }
-                }
-                if (articulation != nullptr)
-                    break;
-            }
-
-            if (articulation == nullptr)
-                continue;
-        }
-
-        const juce::String groupId = activeGroup != nullptr ? activeGroup->id : canonical.groupId;
-        const juce::String groupLabel = activeGroup != nullptr ? activeGroup->label : canonical.groupLabel;
-
-        if (groupId != currentGroup)
-        {
-            currentGroup = groupId;
             LayoutItem header;
             header.header = true;
             header.y = y;
             header.height = headerHeight;
-            header.groupId = groupId;
-            header.groupLabel = groupLabel;
+            header.groupId = group.id;
+            header.groupLabel = group.label;
             layout.push_back(std::move(header));
             y += headerHeight;
+
+            if (collapsedGroups.count(group.id) != 0)
+                continue;
+
+            for (const auto& articulation : group.articulations)
+            {
+                int canonicalRow = -1;
+                for (int row = 0; row < canonicalRows.size(); ++row)
+                {
+                    if (canonicalRows.getReference(row).semanticId == articulation.semanticId)
+                    {
+                        canonicalRow = row;
+                        break;
+                    }
+                }
+                if (canonicalRow < 0)
+                    continue;
+
+                LayoutItem item;
+                item.y = y;
+                item.height = rowHeight;
+                item.canonicalRow = canonicalRow;
+                item.groupId = group.id;
+                item.groupLabel = group.label;
+                item.label = articulation.label.isNotEmpty()
+                    ? articulation.label
+                    : canonicalRows.getReference(canonicalRow).defaultLabel;
+                if (const auto* binding = articulation.primaryNoteBinding())
+                    item.noteName = binding->noteName;
+                layout.push_back(std::move(item));
+                y += rowHeight;
+            }
         }
+    }
+    else
+    {
+        juce::String currentGroup;
+        for (int row = 0; row < canonicalRows.size(); ++row)
+        {
+            const auto& canonical = canonicalRows.getReference(row);
+            if (canonical.groupId != currentGroup)
+            {
+                currentGroup = canonical.groupId;
+                LayoutItem header;
+                header.header = true;
+                header.y = y;
+                header.height = headerHeight;
+                header.groupId = canonical.groupId;
+                header.groupLabel = canonical.groupLabel;
+                layout.push_back(std::move(header));
+                y += headerHeight;
+            }
+            if (collapsedGroups.count(canonical.groupId) != 0)
+                continue;
 
-        if (collapsedGroups.count(groupId) != 0)
-            continue;
-
-        LayoutItem item;
-        item.y = y;
-        item.height = rowHeight;
-        item.canonicalRow = row;
-        item.groupId = groupId;
-        item.groupLabel = groupLabel;
-        item.label = articulation != nullptr && articulation->label.isNotEmpty()
-            ? articulation->label : canonical.defaultLabel;
-
-        if (articulation != nullptr)
-            if (const auto* binding = articulation->primaryNoteBinding())
-                item.noteName = binding->noteName;
-
-        layout.push_back(std::move(item));
-        y += rowHeight;
+            LayoutItem item;
+            item.y = y;
+            item.height = rowHeight;
+            item.canonicalRow = row;
+            item.groupId = canonical.groupId;
+            item.groupLabel = canonical.groupLabel;
+            item.label = canonical.defaultLabel;
+            layout.push_back(std::move(item));
+            y += rowHeight;
+        }
     }
 
     const int width = static_cast<int>(std::ceil(xForTick(

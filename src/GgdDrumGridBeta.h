@@ -32,6 +32,9 @@ public:
     ToolMode getToolMode() const { return toolMode; }
 
     void setPlayPosition(int stepPosition);
+    void setPlayheadPresentation(bool smoothing, bool glow);
+    float getPlayheadContentX() const;
+    int getTimelineInsetPixels() const { return nameWidth; }
     float getZoomScale() const { return zoomScale; }
     void setZoomScale(float scale);
     void resetZoom();
@@ -134,8 +137,11 @@ private:
     float zoomScale = 1.25f;
     int playStepPosition = -1;
     double playStepStartMs = 0.0;
+    double lastPlayNotificationMs = 0.0;
     double playStepMs = 125.0;
     bool hasPlayStepEstimate = false;
+    bool smoothPlayhead = true;
+    bool playheadGlow = true;
 
     int hoverCanonicalRow = -1;
     int hoverTick = -1;
@@ -189,6 +195,9 @@ private:
     float xForTick(float tick) const;
     float tickForX(float x) const;
     int snappedTickForX(float x) const;
+    int cellTickForX(float x) const;
+    float cellWidthPixels() const;
+    float visualHitCenterX(int tick) const;
     int currentViewX() const;
     int canonicalRowAtY(float y) const;
     int layoutYForCanonical(int row) const;
@@ -228,13 +237,14 @@ private:
     void notifyZoomChanged();
     float interpolatedPlayTick() const;
 
-    // Beta 5 keeps the inherited event editing core available under private
-    // compatibility names while replacing the few mouse paths that need
-    // resolution-independent erasing, drag interpolation and row audition.
+    // Beta 6 keeps the inherited event editing core available under private
+    // compatibility names while replacing the mouse paths that need cell-based
+    // drawing, free-resolution erasing and articulation audition.
     EventRef eventAtLegacy(float x, float y) const;
     void mouseDownLegacy(const juce::MouseEvent& e);
     void mouseDragLegacy(const juce::MouseEvent& e);
     void mouseUpLegacy(const juce::MouseEvent& e);
+    void mouseMoveLegacy(const juce::MouseEvent& e);
 
     // Beta 2 compiles the Beta 1 implementation as a compatibility base and
     // replaces presentation/playhead methods. These declarations are the

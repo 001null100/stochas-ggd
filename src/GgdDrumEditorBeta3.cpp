@@ -63,33 +63,6 @@ void GgdDrumEditor::updateSelectionPropertyControls()
         patternSelector.setSelectedId(pattern + 1, juce::dontSendNotification);
     }
 
-    // Beta 5 turns the redundant standalone Import MIDI button into a compact
-    // settings control and removes the always-visible theme selector. Reapply
-    // the compact bounds here after host resizes, since the inherited shell owns
-    // the main resized() implementation.
-    if (beta4UiInitialised)
-    {
-        const int gap = 7;
-        const int editorWidth = juce::jmax(780, getWidth() - browserWidth);
-        const int y = 12;
-        const int h = 33;
-        const int settingsW = 34;
-
-        auto patternBounds = patternSelector.getBounds();
-        patternSelector.setBounds(patternBounds.getX(), y, 156, h);
-        patternActionsButton.setBounds(patternSelector.getRight() + gap, y, 76, h);
-        exportMidiButton.setBounds(patternActionsButton.getRight() + gap, y, 88, h);
-
-        const int settingsX = editorWidth - 12 - settingsW;
-        importMidiButton.setBounds(settingsX, y, settingsW, h);
-        const int nameX = exportMidiButton.getRight() + gap;
-        patternName.setBounds(nameX, y,
-                              juce::jmax(90, settingsX - gap - nameX), h);
-
-        themeSelector.setBounds({});
-        themeSelector.setVisible(false);
-    }
-
     const bool selectMode = grid->getToolMode() == GgdDrumGrid::ToolMode::select;
     const int selected = grid->getSelectedCount();
     const bool active = selectMode && selected > 0;

@@ -29,6 +29,7 @@ public:
    virtual void automationParameterHasChanged(int paramId, int paramValue, int layer) = 0;
 
    // return textual representation of a parameter given id and value
+   virtual String getTextForAutomationParameterValue(int paramId, int paramValue, int layer) = delete;
    virtual String getTextForAutomationParameterValue(int paramId, int paramValue) = 0;
 
    // parse string to value
@@ -166,6 +167,9 @@ class SeqAudioProcessor  : public AudioProcessor, public SeqProcessorNotifierHel
     bool isBusesLayoutSupported(const BusesLayout& layouts) const override;
    #endif
     void processBlock (AudioSampleBuffer&, MidiBuffer&) override;
+    // The GGD transport wrapper compiles the inherited implementation under
+    // this name, then supplies a bar-origin-aware processBlock override.
+    void processLegacyBlock (AudioSampleBuffer&, MidiBuffer&);
     AudioProcessorEditor* createEditor() override;
     bool hasEditor() const override;
     const String getName() const override;

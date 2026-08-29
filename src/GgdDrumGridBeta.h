@@ -56,14 +56,13 @@ public:
     void createDoubleFromSelection();
     void deleteSelected();
 
-    // Beta 7 context-strip transforms. These are intentionally selection-based
-    // and complementary to the existing keyboard vocabulary rather than button
-    // duplicates of copy/nudge commands.
+    // Compact selection transforms. Copy/Paste owns phrase repetition now, so
+    // these buttons focus on operations that are cumbersome to do manually.
     void selectRowsContainingSelection();
-    void repeatSelection();
+    void fillSelectionGaps();
     void mirrorSelectedTiming();
     void rampSelectedVelocity(bool rising);
-    void rotateSelection(int direction);
+    void scaleSelectedVelocityRange(float factor);
     void thinSelection();
 
     bool keyPressed(const juce::KeyPress& key) override;

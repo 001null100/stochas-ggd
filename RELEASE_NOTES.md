@@ -1,119 +1,93 @@
-# Stochas GGD v0.2.0-beta.7
+# Stochas GGD v0.2.0-beta.8
 
-Beta 7 is an editing-workflow pass on top of Beta 6. It restores high-information interactions that were lost during the visual rewrite, makes playhead following truly centre-locked, hardens bar-count text entry, and replaces redundant context-strip buttons with pattern transforms. The audio scheduler and stored event timing are unchanged.
+Beta 8 is intentionally a **1.0 release-candidate cleanup pass** rather than another expansion release. It removes redundant UI actions, fixes the remaining Shift-velocity feedback rough edge, makes instrument-family dividers safer to interact with, and replaces novelty transforms with practical drum-editing tools. The scheduler, stored event timing, MIDI mapping and project persistence remain unchanged.
 
-## Velocity and timing feedback restored
+## Copy / Paste is the phrase-repeat workflow
 
-Velocity and free-timing edits once again show a compact value bubble directly above the note being edited.
+The dedicated **Repeat** transform has been removed. It duplicated the existing clipboard behavior.
 
-- **Shift-drag velocity** shows `VEL <value>` while dragging.
-- **Alt-drag timing** shows the signed tick offset from the nearest active subdivision, for example `TIME +18t`.
-- The bubble remains briefly after release so the final value is readable without permanently cluttering the grid.
-- The popup follows the note while timing is moved and respects the horizontally scrolled sticky articulation column.
+The intended workflow is now simply:
 
-## Alt-double-click timing reset
+1. select a phrase
+2. press `C` once
+3. press `V` to paste immediately after the current selected phrase
+4. the pasted copy becomes the selection, so additional `V` presses naturally walk the phrase forward
 
-Alt-double-clicking a hit now performs the event-model equivalent of resetting timing: it quantizes that individual hit to the **nearest currently active subdivision**.
+This keeps repetition on the keyboard instead of spending a permanent context-strip slot on it.
 
-This works with the visible editing resolution, including straight and triplet grids. If the destination is already occupied by another event on the same row, the editor leaves the hit unchanged rather than destroying or merging notes.
+## Shift velocity inspection and editing
 
-## Shift-drag velocity in Select mode
+The Beta 7 Shift-click path could leave the velocity bubble pinned after merely changing selection. Beta 8 separates **inspection**, **selection** and **editing** more cleanly.
 
-Select mode now supports direct velocity editing without sacrificing Shift-click multi-selection.
+- **Hold Shift and hover a hit** to inspect its velocity.
+- **Shift-click** still toggles that hit in the selection.
+- **Shift-drag** still edits velocity; a multi-selection moves together while preserving relative differences.
+- Releasing Shift or leaving the grid clears the hover velocity bubble.
+- Velocity/timing bubbles during active edits remain available exactly where they are useful.
 
-- **Shift-click** still toggles a hit in or out of the selection.
-- Once a Shift gesture actually moves a few pixels, it becomes a velocity drag instead.
-- If the dragged hit belongs to a multi-selection, every selected hit changes by the same relative amount while preserving the velocity differences between them.
-- If the dragged hit was not selected, it becomes the selection before the velocity gesture begins.
+## Instrument groups only collapse from the articulation panel
 
-## Bars keyboard input hardened
+Instrument-family headers remain full-width visual dividers across the timeline, but the timeline portion is now deliberately inert.
 
-The Bars field now explicitly behaves as a focusable, editable JUCE TextEditor rather than relying on inherited host focus behavior.
+A group can only be collapsed or expanded by clicking its header in the sticky **left articulation panel**. This prevents accidental folding when clicking an otherwise useful empty portion of a group divider in the grid.
 
-- mouse click explicitly grabs keyboard focus
-- the entire value remains selected on focus
-- typing replaces the old value immediately
-- Return commits the new bar count and gives keyboard focus back to the grid
-- the field accepts up to four numeric digits
-- model refresh still refuses to overwrite the field while the user is editing it
+## Context-strip transforms refined
 
-## Centre-locked playhead following
-
-Follow Playhead no longer chases a configurable right-edge margin. When enabled, playback is locked to the **centre of the visible timeline** as soon as enough content exists to scroll there.
-
-- only horizontal timeline position moves; articulation-row vertical scroll is untouched
-- the beginning naturally remains left-aligned until the playhead reaches the centre position
-- while playing, temporary trailing viewport runway is added so the final half-screen of the pattern can remain centred too
-- stopping playback removes that temporary runway and restores the normal content width
-- the old Follow Edge Margin control has been removed from Settings because centre-lock makes it obsolete
-
-Beta 6 smooth interpolation and optional forward glow remain available.
-
-## Redundant strip buttons replaced with transforms
-
-The permanent **All / Copy / Paste**, **Vel +/-**, and **Earlier / Quantize / Later** buttons duplicated operations already faster from the keyboard or direct manipulation. Their slots now expose pattern-level transforms instead.
+The transform strip now focuses on operations that are awkward to reproduce manually:
 
 ### Rows
-Select every event on each instrument row represented by the current selection. Useful for grabbing an entire kick, snare, hat or articulation line after selecting one representative hit.
+Select every event on each instrument row represented by the current selection.
 
-### Repeat
-Copy the selected phrase immediately after its current temporal span. The new copy becomes selected, so repeated clicks can walk a phrase forward through the pattern.
+### Fill
+Fill missing **current-grid subdivisions** between selected endpoints on each row. Existing hits are never moved or quantized. New hits interpolate velocity between the surrounding selected hits, making Fill useful for building rolls, hats and denser variations without flattening the dynamics.
 
 ### Mirror
-Reflect selected event timing around the temporal centre of the selection while keeping each event on its current instrument row.
+Reflect selected hit timing around the temporal centre of the selection while keeping each hit on its current articulation row.
 
 ### Ramp+ / Ramp-
-Create rising or falling velocity contours across selected hits. Existing velocity spread is respected; nearly-flat selections are expanded into a useful dynamic range before the ramp is applied.
+Create rising or falling velocity contours across selected hits.
 
-### Rot < / Rot >
-Rotate selected events left or right by one current subdivision, wrapping inside the selection's own temporal span.
+### Dyn- / Dyn+
+Compress or expand velocity differences around the selection's average velocity. `Dyn-` tightens an uneven performance; `Dyn+` exaggerates the existing accents and ghosts without replacing them with fixed values.
 
 ### Thin
-Remove every second selected event independently on each instrument row, providing a quick density-reduction operation.
+Remove every second selected event independently on each articulation row for quick density reduction.
 
-The original keyboard workflow remains:
+The previous Rotate actions have been removed.
 
-- `A` select all
-- `C` copy
-- `V` paste
-- arrow keys move/nudge selection
-- Alt + arrows duplicate while moving
-- direct Shift-drag handles velocity
-- direct Alt-drag handles timing
+## Editing workflow retained
 
-Ghost, Accent, probability presets, Humanize, Flam and Double remain in the strip because they provide distinct performance operations rather than shortcut duplicates.
+Beta 8 keeps the editing fixes from previous betas:
 
-## Beta 6 presentation retained
-
-Beta 7 keeps:
-
-- modal local Settings
-- Graphite / Midnight / Ember / Contrast themes
-- 120 Hz optional playhead interpolation
-- optional directional playhead glow
 - cell-centred hit presentation
 - cell-based Draw targeting
-- readability hierarchy of bars > beats > primary subdivisions > fine subdivisions
-- clear instrument-family separation
-
-## Previous workflow fixes retained
-
-Beta 7 also preserves:
-
 - unconditional right-click erase in Draw mode
-- free-resolution erasing across straight/triplet hits
-- interpolation across skipped subdivisions during paint drags
+- resolution-independent erasing across straight and triplet hits
+- paint-drag interpolation across skipped subdivisions
+- Alt-drag free timing
+- Alt-double-click quantize-to-nearest-current-subdivision
+- velocity and timing value bubbles
 - articulation-name audition through the downstream GGD instrument
-- live pattern-slot caption refresh
+- reliable Bars click/select/type behavior
 - 32-character pattern names
-- indexed Grooves / Patterns browser
-- high-resolution MIDI import/export
-- semantic `.sggdp` pattern storage
-- per-hit probability, Ghost, Accent, Flam, Double and Humanize actions
+- live pattern-slot caption refresh
+
+## Playback and presentation retained
+
+Beta 8 keeps:
+
+- centre-locked playhead following
+- optional 120 Hz playhead interpolation
+- optional forward playhead glow
+- modal Settings
+- Graphite / Midnight / Ember / Contrast themes
+- bar > beat > primary subdivision > fine subdivision hierarchy
+- clear instrument-family divider hierarchy
+- fixed Grooves / Patterns browser
 
 ## Engine intentionally unchanged
 
-Beta 7 does **not** modify:
+Beta 8 does **not** modify:
 
 - host-PPQ event scheduling
 - 960 PPQ event storage
@@ -125,16 +99,20 @@ Beta 7 does **not** modify:
 - pattern geometry
 - live MIDI passthrough
 
-## Current boundaries
+That is deliberate. At this stage, the priority is stabilising the interaction surface rather than reopening the engine without a concrete playback bug.
+
+## Current boundaries before 1.0
 
 - MIDI export remains file-based; direct MIDI drag-out into Bitwig is still not implemented.
-- Probability still uses quick presets rather than a dedicated lane/arbitrary-value editor.
+- Probability uses quick presets rather than a dedicated lane/arbitrary-value editor.
 - Experimental GGD Groove Player source pitch 85 remains intentionally unresolved.
 - Playhead smoothing remains display interpolation reconstructed from the existing host notifier rather than a new audio-thread timing feed.
 
+None of those currently block the core drum-sequencing workflow, so Beta 8 is intended to be tested as the final prerelease candidate before a 1.0 decision.
+
 ## Release-candidate checks
 
-The exact Beta 7 release candidate must compile and package successfully in the Windows PR workflow before merge. The release is complete only when GitHub Releases contains both:
+The exact Beta 8 candidate must compile and package successfully in the Windows PR workflow before merge. The release is complete only when GitHub Releases contains both:
 
 - `Stochas.GGD.clap`
-- `Stochas-GGD-v0.2.0-beta.7-Windows-x64.zip`
+- `Stochas-GGD-v0.2.0-beta.8-Windows-x64.zip`

@@ -22,7 +22,7 @@ Use the **Releases** page of this repository. Each release publishes:
 - Event-based drum patterns at **960 PPQ**: straight, triplet and off-grid hits side by side.
 - Eight pattern slots, each with its own time signature (1-32 over 2, 4, 8 or 16) and bar count.
 - **Host-bar sync:** every pattern bar starts on a host bar line, so host time-signature changes never shift the groove. *Free run* is available for polymeter.
-- Meter and bar changes keep hits in their bars. Hits that don't fit are hidden and come back if the pattern grows again.
+- Meter and bar changes keep hits in their bars. Hits that don't fit are hidden (and saved with the project) and come back if the pattern grows again.
 - Semantic storage: hits are stored as articulations (`snare.hit`, `hihat.open_2`...) and the active kit map decides the MIDI note.
 - Built-in maps for GGD **P V**, **P IV** and **Modern & Massive**. The grid shows only the active kit's articulations, in its own order.
 - Draw and Select tools: paint, erase, box select, move, duplicate, nudge, velocity and timing editing.

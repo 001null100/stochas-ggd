@@ -720,9 +720,10 @@ public:
             first.stopAtEnd = false;
             const auto before = simulate(engine, *data, song, first);
 
-            std::vector<GgdPatternOps::ParkedHit> parked;
-            expect(GgdPatternOps::changeGeometry(*pattern, 3, 4, 1, parked));
-            expectEquals(static_cast<int>(parked.size()), 1, "the kick on beat 4 is parked");
+            const auto change = GgdPatternOps::changeGeometry(*pattern, 3, 4, 1);
+            expect(change.changed);
+            expectEquals(change.hidden, 1, "the kick on beat 4 is parked");
+            expectEquals(pattern->getParkedCount(), 1);
 
             SimulationSettings second;
             second.startPpq = before.finalPpq;
@@ -778,8 +779,6 @@ public:
 
     void runTest() override
     {
-        using GgdPatternOps::ParkedHit;
-
         beginTest("Changing the meter keeps hits inside their bars");
         {
             GgdEventPattern pattern;
@@ -787,21 +786,22 @@ public:
             pattern.addEvent(rowKick, 0);
             pattern.addEvent(rowKick, 3840);          // bar 2 beat 1
             pattern.addEvent(rowSnare, 3840 + 2880);  // bar 2 beat 4
-            std::vector<ParkedHit> parked;
 
-            expect(GgdPatternOps::changeGeometry(pattern, 7, 8, 2, parked));
+            expect(GgdPatternOps::changeGeometry(pattern, 7, 8, 2).changed);
             expectEquals(pattern.getLengthTicks(), 2 * 3360);
             expect(pattern.findEvent(rowKick, 0) >= 0);
             expect(pattern.findEvent(rowKick, 3360) >= 0, "bar 2 must still start on its bar line");
             expect(pattern.findEvent(rowSnare, 3360 + 2880) >= 0, "beat 4 still fits a 7/8 bar");
-            expect(parked.empty());
+            expectEquals(pattern.getParkedCount(), 0);
 
-            expect(GgdPatternOps::changeGeometry(pattern, 3, 4, 2, parked));
-            expectEquals(static_cast<int>(parked.size()), 1);
+            const auto toThree = GgdPatternOps::changeGeometry(pattern, 3, 4, 2);
+            expectEquals(toThree.hidden, 1);
+            expectEquals(pattern.getParkedCount(), 1);
             expectEquals(pattern.getEventCount(), 2);
 
-            expect(GgdPatternOps::changeGeometry(pattern, 4, 4, 2, parked));
-            expect(parked.empty());
+            const auto toFour = GgdPatternOps::changeGeometry(pattern, 4, 4, 2);
+            expectEquals(toFour.restored, 1);
+            expectEquals(pattern.getParkedCount(), 0);
             expect(pattern.findEvent(rowSnare, 3840 + 2880) >= 0, "parked hit returns");
         }
 
@@ -810,28 +810,69 @@ public:
             GgdEventPattern pattern;
             pattern.activate(4, 4, 4);
             pattern.addEvent(rowKick, 3 * 3840);
-            std::vector<ParkedHit> parked;
-            GgdPatternOps::changeGeometry(pattern, 4, 4, 2, parked);
+            GgdPatternOps::changeGeometry(pattern, 4, 4, 2);
             expectEquals(pattern.getEventCount(), 0);
-            GgdPatternOps::changeGeometry(pattern, 4, 4, 4, parked);
+            expectEquals(pattern.getParkedCount(), 1);
+            GgdPatternOps::changeGeometry(pattern, 4, 4, 4);
             expect(pattern.findEvent(rowKick, 3 * 3840) >= 0);
+            expectEquals(pattern.getParkedCount(), 0);
         }
 
         beginTest("Live hits win over parked hits");
         {
-            // A parked bar-2 hit meets a live hit created by Duplicate Bars.
+            // A hidden hit whose spot is taken by a live hit when it returns.
+            GgdEventPattern pattern;
+            pattern.activate(4, 4, 1);
+            pattern.addEvent(rowKick, 960, 120);
+            GgdParkedHit hidden;
+            hidden.bar = 0;
+            hidden.offset = 960;
+            hidden.row = static_cast<std::uint8_t>(rowKick);
+            hidden.velocity = 50;
+            expect(pattern.addParked(hidden));
+            GgdPatternOps::changeGeometry(pattern, 4, 4, 2);
+            expectEquals(pattern.getParkedCount(), 0);
+            const auto* hit = pattern.findEventPtr(rowKick, 960);
+            expect(hit != nullptr && hit->velocity == 120, "the live hit keeps its spot");
+        }
+
+        beginTest("Doubling replaces hidden hits of the repeated bars");
+        {
             GgdEventPattern pattern;
             pattern.activate(4, 4, 2);
-            pattern.addEvent(rowKick, 3840, 50);
-            std::vector<ParkedHit> parked;
-            GgdPatternOps::changeGeometry(pattern, 4, 4, 1, parked);
-            expectEquals(static_cast<int>(parked.size()), 1);
             pattern.addEvent(rowKick, 0, 120);
-            expect(GgdPatternOps::duplicateBars(pattern));
-            GgdPatternOps::changeGeometry(pattern, 7, 8, 2, parked);
-            expect(parked.empty(), "the parked duplicate is dropped");
-            const auto* hit = pattern.findEventPtr(rowKick, 3360);
+            pattern.addEvent(rowSnare, 3840, 50);     // bar 2
+            pattern.addEvent(rowSnare, 3840 + 2880);  // bar 2 beat 4
+            GgdPatternOps::changeGeometry(pattern, 4, 4, 1);
+            expectEquals(pattern.getParkedCount(), 2);
+
+            int discarded = -1;
+            expect(GgdPatternOps::duplicateBars(pattern, &discarded));
+            expectEquals(discarded, 2, "bar 2 is now the repeat of bar 1");
+            expectEquals(pattern.getParkedCount(), 0);
+            const auto* hit = pattern.findEventPtr(rowKick, 3840);
             expect(hit != nullptr && hit->velocity == 120);
+            expect(pattern.findEvent(rowSnare, 3840) < 0);
+        }
+
+        beginTest("Parked hits keep the slot's meter edits reversible");
+        {
+            GgdEventPattern pattern;
+            pattern.activate(4, 4, 4);
+            for (int bar = 0; bar < 4; ++bar)
+                for (int beat = 0; beat < 4; ++beat)
+                    pattern.addEvent(rowHat, bar * 3840 + beat * 960, 60 + bar * 10 + beat);
+            GgdPatternOps::changeGeometry(pattern, 3, 4, 2);
+            GgdPatternOps::changeGeometry(pattern, 5, 8, 1);
+            GgdPatternOps::changeGeometry(pattern, 4, 4, 4);
+            expectEquals(pattern.getEventCount(), 16);
+            expectEquals(pattern.getParkedCount(), 0);
+            for (int bar = 0; bar < 4; ++bar)
+                for (int beat = 0; beat < 4; ++beat)
+                {
+                    const auto* hit = pattern.findEventPtr(rowHat, bar * 3840 + beat * 960);
+                    expect(hit != nullptr && hit->velocity == 60 + bar * 10 + beat);
+                }
         }
 
         beginTest("Duplicating bars repeats the pattern");

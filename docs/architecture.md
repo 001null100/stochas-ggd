@@ -46,7 +46,7 @@ A pattern slot is a `GgdEventPattern`: meter (numerator 1-32, denominator 2/4/8/
 
 The visual grid is only an editing projection. A hit never becomes a 1/16 or 1/32 hit because of the grid; this is what allows straight, triplet and off-grid hits side by side, imported performances, flams and drags in ticks.
 
-`GgdPatternOps::changeGeometry` changes meter or bar count *bar by bar*: each hit keeps its bar index and its offset from the bar line. Hits that no longer fit are returned as `ParkedHit`s (bar, offset, row, velocity...). The editor keeps them per slot and passes them back on the next geometry change, so they reappear when the pattern grows again. A live hit always wins over a parked hit on the same spot.
+`GgdPatternOps::changeGeometry` changes meter or bar count *bar by bar*: each hit keeps its bar index and its offset from the bar line. Hits that no longer fit become *parked hits* (bar, offset, row, velocity...) stored in the pattern itself, up to 2048 per pattern. They never play, are saved with the project, travel with duplicates and undo, and come back on a later geometry change that has room for them. A live hit always wins over a parked hit on the same spot, and *Double length* discards parked hits of the bars it fills with the repeat. `.sggdp` files and MIDI exports contain only the visible hits.
 
 ## Timing model
 
@@ -77,7 +77,7 @@ The random seed changes whenever the transport starts or jumps backwards, unless
 
 ## Threading
 
-- **Project state.** `SeqDataBuffer` holds two `SequenceData` copies (about 1.6 MB each). The editor edits the UI copy and calls `processor.publishEdit()`, which flips the published index, waits for any block still reading the old copy (the audio thread announces the copy it reads in `AudioReadScope`) and then refreshes the old copy. The audio thread never sees a half-written pattern and never waits.
+- **Project state.** `SeqDataBuffer` holds two `SequenceData` copies (about 2.4 MB each). The editor edits the UI copy and calls `processor.publishEdit()`, which flips the published index, waits for any block still reading the old copy (the audio thread announces the copy it reads in `AudioReadScope`) and then refreshes the old copy. The audio thread never sees a half-written pattern and never waits.
 - **Playhead.** The engine publishes a `GgdPlayheadSnapshot` (anchor, shape, block position, tempo, wall-clock time) through a seqlock. The editor extrapolates the position to the current frame with the same timeline maths.
 - **Played-note feedback.** A single-producer single-consumer FIFO carries the notes that were actually scheduled (after mute and probability), with the wall-clock time they are due. Feedback can drop events if the UI falls behind; it can never block the audio thread.
 - **Automation.** Overrides from host parameters are atomics read by the engine.

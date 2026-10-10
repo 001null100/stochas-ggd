@@ -16,6 +16,7 @@ bool eventLess(const GgdSequenceEvent& a, const GgdSequenceEvent& b)
 GgdEventPattern::GgdEventPattern()
 {
     std::memset(events, 0, sizeof(events));
+    std::memset(parked, 0, sizeof(parked));
 }
 
 void GgdEventPattern::clear(bool keepGeometry)
@@ -29,7 +30,21 @@ void GgdEventPattern::clear(bool keepGeometry)
         denominator = 4;
         bars = 1;
         active = false;
+        parkedCount = 0;
     }
+}
+
+const GgdParkedHit* GgdEventPattern::getParked(int index) const
+{
+    return index >= 0 && index < parkedCount ? &parked[index] : nullptr;
+}
+
+bool GgdEventPattern::addParked(const GgdParkedHit& hit)
+{
+    if (parkedCount >= GGD_MAX_PARKED_HITS)
+        return false;
+    parked[parkedCount++] = hit;
+    return true;
 }
 
 void GgdEventPattern::activate(int newNumerator, int newDenominator, int newBars)

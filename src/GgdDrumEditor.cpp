@@ -84,15 +84,25 @@ bool sameEvent(const GgdSequenceEvent& a, const GgdSequenceEvent& b)
         && a.probability == b.probability && a.durationTicks == b.durationTicks;
 }
 
-bool sameParked(const GgdPatternOps::ParkedHit& a, const GgdPatternOps::ParkedHit& b)
+bool sameParked(const GgdParkedHit& a, const GgdParkedHit& b)
 {
     return a.bar == b.bar && a.offset == b.offset && a.row == b.row && a.velocity == b.velocity
         && a.probability == b.probability && a.durationTicks == b.durationTicks;
 }
 
-bool sameParkedList(const std::vector<GgdPatternOps::ParkedHit>& a, const std::vector<GgdPatternOps::ParkedHit>& b)
+bool sameParkedList(const std::vector<GgdParkedHit>& a, const std::vector<GgdParkedHit>& b)
 {
     return a.size() == b.size() && std::equal(a.begin(), a.end(), b.begin(), sameParked);
+}
+
+bool parkedMatches(const GgdEventPattern& pattern, const std::vector<GgdParkedHit>& hits)
+{
+    if (pattern.getParkedCount() != static_cast<int>(hits.size()))
+        return false;
+    for (int i = 0; i < pattern.getParkedCount(); ++i)
+        if (!sameParked(*pattern.getParked(i), hits[static_cast<size_t>(i)]))
+            return false;
+    return true;
 }
 
 juce::String plural(int count, const juce::String& singular, const juce::String& pluralForm)
@@ -280,8 +290,18 @@ public:
         editor.setInputRestrictions(2, "0123456789");
         editor.setSelectAllWhenFocused(true);
         editor.setFont(GgdFonts::semibold(13.0f));
-        editor.onReturnKey = [this] { commitText(); };
-        editor.onEscapeKey = [this] { endEditing(); };
+        // TextEditor delivers these asynchronously. Only an explicit Return
+        // or Escape hands focus back; when focus moved elsewhere it stays.
+        editor.onReturnKey = [this]
+        {
+            commitText();
+            returnFocus();
+        };
+        editor.onEscapeKey = [this]
+        {
+            endEditing();
+            returnFocus();
+        };
         editor.onFocusLost = [this] { commitText(); };
         addChildComponent(editor);
     }
@@ -299,6 +319,11 @@ public:
     }
 
     bool isEditing() const { return editor.isVisible(); }
+
+    // Applies a value being typed right away, before something else (a slot
+    // switch) changes what the value would apply to.
+    void finishEditing() { commitText(); }
+    void cancelEditing() { endEditing(); }
 
     void paint(juce::Graphics& g) override
     {
@@ -457,6 +482,10 @@ private:
             return;
         editor.setVisible(false);
         repaint();
+    }
+
+    void returnFocus()
+    {
         if (onEditingFinished)
             onEditingFinished();
     }
@@ -662,7 +691,8 @@ GgdDrumEditor::GgdDrumEditor(SeqAudioProcessor& p)
     };
     patternName.onEscapeKey = [this]
     {
-        patternName.setText(nameOf(layer(), currentSlot()), false);
+        const auto name = nameOf(layer(), nameFieldSlot >= 0 ? nameFieldSlot : currentSlot());
+        patternName.setText(isDefaultName(name) ? juce::String() : name, false);
         focusGrid();
     };
     patternName.onFocusLost = [this] { renamePattern(); };
@@ -760,10 +790,11 @@ GgdDrumEditor::GgdDrumEditor(SeqAudioProcessor& p)
     parkedButton.onClick = [this]
     {
         juce::PopupMenu menu;
-        const int count = static_cast<int>(history[static_cast<size_t>(currentSlot())].parked.size());
+        const int count = currentPattern().getParkedCount();
         menu.addSectionHeader(plural(count, "hidden hit", "hidden hits"));
         menu.addItem(1, "Discard hidden hits");
         auto safe = juce::Component::SafePointer<GgdDrumEditor>(this);
+        menu.setLookAndFeel(&lookAndFeel);
         menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(parkedButton),
                            [safe](int result)
                            {
@@ -985,6 +1016,8 @@ void GgdDrumEditor::changeListenerCallback(juce::ChangeBroadcaster*)
 void GgdDrumEditor::reloadFromProcessor()
 {
     // The host replaced the project (preset load, undo in the host...).
+    barsStepper->cancelEditing();
+    nameFieldSlot = -1;
     resetHistories();
     grid->setKitMap(activeMap());
     grid->patternGeometryChanged();
@@ -1186,9 +1219,10 @@ GgdDrumEditor::PatternState GgdDrumEditor::capture(int slot) const
     for (int i = 0; i < pattern->getEventCount(); ++i)
         state.events.push_back(*pattern->getEvent(i));
     state.name = nameOf(layer(), slot);
+    for (int i = 0; i < pattern->getParkedCount(); ++i)
+        state.parked.push_back(*pattern->getParked(i));
 
     const auto& slotHistory = history[static_cast<size_t>(slot)];
-    state.parked = slotHistory.parked;
     state.source = slotHistory.source;
     state.sourceIsPattern = slotHistory.sourceIsPattern;
     if (slot == currentSlot() && grid != nullptr)
@@ -1202,7 +1236,7 @@ bool GgdDrumEditor::liveMatches(const PatternState& state, int slot) const
     if (pattern->getNumerator() != state.numerator || pattern->getDenominator() != state.denominator
         || pattern->getBars() != state.bars || pattern->getEventCount() != static_cast<int>(state.events.size())
         || nameOf(layer(), slot) != state.name
-        || !sameParkedList(history[static_cast<size_t>(slot)].parked, state.parked))
+        || !parkedMatches(*pattern, state.parked))
         return false;
 
     for (int i = 0; i < pattern->getEventCount(); ++i)
@@ -1218,10 +1252,11 @@ void GgdDrumEditor::restore(int slot, const PatternState& state)
     pattern->activate(state.numerator, state.denominator, state.bars);
     for (const auto& event : state.events)
         pattern->addEvent(event.row, event.tick, event.velocity, event.probability, event.durationTicks);
+    for (const auto& hit : state.parked)
+        pattern->addParked(hit);
     layer().setPatternName(state.name.toRawUTF8(), slot);
 
     auto& slotHistory = history[static_cast<size_t>(slot)];
-    slotHistory.parked = state.parked;
     slotHistory.source = state.source;
     slotHistory.sourceIsPattern = state.sourceIsPattern;
 
@@ -1359,6 +1394,8 @@ void GgdDrumEditor::selectPatternSlot(int slot)
     if (outgoingHistory.valid && liveMatches(outgoingHistory.committed, outgoing))
         outgoingHistory.committed.selection = grid->getSelectionCoordinates();
 
+    // Typed but not yet committed values belong to the outgoing slot.
+    barsStepper->finishEditing();
     if (patternName.hasKeyboardFocus(true))
         renamePattern();
 
@@ -1383,20 +1420,12 @@ void GgdDrumEditor::selectPatternSlot(int slot)
 void GgdDrumEditor::setMeter(int numerator, int denominator)
 {
     auto& pattern = currentPattern();
-    auto& parked = history[static_cast<size_t>(currentSlot())].parked;
-    const auto parkedBefore = parked.size();
-    if (GgdPatternOps::changeGeometry(pattern, numerator, denominator, pattern.getBars(), parked))
+    const auto change = GgdPatternOps::changeGeometry(pattern, numerator, denominator, pattern.getBars());
+    if (change.changed)
     {
         grid->patternGeometryChanged();
         commitEdit();
-        if (parked.size() > parkedBefore)
-            showStatus(plural(static_cast<int>(parked.size() - parkedBefore), "hit doesn't", "hits don't")
-                       + " fit " + juce::String(pattern.getNumerator()) + "/" + juce::String(pattern.getDenominator())
-                       + " and " + (parked.size() - parkedBefore == 1 ? "is" : "are")
-                       + " hidden. Lengthen the bars again to bring them back.");
-        else if (parked.size() < parkedBefore)
-            showStatus(plural(static_cast<int>(parkedBefore - parked.size()), "hidden hit is", "hidden hits are")
-                       + " back");
+        reportGeometryChange(change);
     }
     refreshHeader();
     focusGrid();
@@ -1405,37 +1434,50 @@ void GgdDrumEditor::setMeter(int numerator, int denominator)
 void GgdDrumEditor::setBars(int bars)
 {
     auto& pattern = currentPattern();
-    auto& parked = history[static_cast<size_t>(currentSlot())].parked;
-    const auto parkedBefore = parked.size();
-    if (GgdPatternOps::changeGeometry(pattern, pattern.getNumerator(), pattern.getDenominator(), bars, parked))
+    const auto change = GgdPatternOps::changeGeometry(pattern, pattern.getNumerator(), pattern.getDenominator(), bars);
+    if (change.changed)
     {
         grid->patternGeometryChanged();
         commitEdit();
-        if (parked.size() > parkedBefore)
-            showStatus(plural(static_cast<int>(parked.size() - parkedBefore), "hit is", "hits are")
-                       + " hidden past bar " + juce::String(pattern.getBars())
-                       + ". Add the bars back to restore them.");
-        else if (parked.size() < parkedBefore)
-            showStatus(plural(static_cast<int>(parkedBefore - parked.size()), "hidden hit is", "hidden hits are")
-                       + " back");
+        reportGeometryChange(change);
     }
     refreshHeader();
 }
 
+void GgdDrumEditor::reportGeometryChange(const GgdPatternOps::GeometryChange& change)
+{
+    const auto& pattern = currentPattern();
+    juce::String text;
+    if (change.hidden > 0)
+        text << plural(change.hidden, "hit doesn't", "hits don't") << " fit "
+             << pattern.getNumerator() << "/" << pattern.getDenominator() << " x "
+             << plural(pattern.getBars(), "bar", "bars") << " and "
+             << (change.hidden == 1 ? "is" : "are") << " hidden. They come back if the pattern grows again.";
+    else if (change.restored > 0)
+        text << plural(change.restored, "hidden hit is", "hidden hits are") << " back.";
+    if (change.dropped > 0)
+        text << (text.isEmpty() ? "" : " ") << plural(change.dropped, "hit", "hits")
+             << " could not be kept (too many hidden hits). Undo brings them back.";
+    if (text.isNotEmpty())
+        showStatus(text);
+}
+
 void GgdDrumEditor::discardParkedHits()
 {
-    auto& parked = history[static_cast<size_t>(currentSlot())].parked;
-    if (parked.empty())
+    auto& pattern = currentPattern();
+    if (pattern.getParkedCount() == 0)
         return;
-    const int count = static_cast<int>(parked.size());
-    parked.clear();
+    const int count = pattern.getParkedCount();
+    pattern.clearParked();
     commitEdit();
     showStatus(plural(count, "hidden hit", "hidden hits") + " discarded");
 }
 
 void GgdDrumEditor::renamePattern()
 {
-    const int slot = currentSlot();
+    // The field edits the slot whose name it shows. Its focus-loss callback
+    // arrives asynchronously, possibly after a slot switch.
+    const int slot = nameFieldSlot >= 0 ? nameFieldSlot : currentSlot();
     auto desired = fitPatternName(patternName.getText());
     if (desired.isEmpty())
         desired = SEQ_DEFAULT_PAT_NAME;
@@ -1444,8 +1486,9 @@ void GgdDrumEditor::renamePattern()
         refreshHeader();
         return;
     }
+    ensureHistory(slot);
     layer().setPatternName(desired.toRawUTF8(), slot);
-    commitEdit();
+    commitSlotEdit(slot);
 }
 
 void GgdDrumEditor::clearPattern()
@@ -1453,7 +1496,7 @@ void GgdDrumEditor::clearPattern()
     const int slot = currentSlot();
     auto& slotHistory = history[static_cast<size_t>(slot)];
     currentPattern().clear(true);
-    slotHistory.parked.clear();
+    currentPattern().clearParked();
     slotHistory.source = juce::File();
     grid->patternReplaced();
     commitEdit();
@@ -1463,7 +1506,8 @@ void GgdDrumEditor::clearPattern()
 
 void GgdDrumEditor::doublePatternLength()
 {
-    if (!GgdPatternOps::duplicateBars(currentPattern()))
+    int discarded = 0;
+    if (!GgdPatternOps::duplicateBars(currentPattern(), &discarded))
     {
         showStatus("The pattern can't double: it would be longer than " + juce::String(GGD_MAX_PATTERN_BARS)
                    + " bars of 4/4");
@@ -1471,7 +1515,11 @@ void GgdDrumEditor::doublePatternLength()
     }
     grid->patternGeometryChanged();
     commitEdit();
-    showStatus("Doubled to " + plural(currentPattern().getBars(), "bar", "bars"));
+    juce::String text = "Doubled to " + plural(currentPattern().getBars(), "bar", "bars") + ".";
+    if (discarded > 0)
+        text << " " << plural(discarded, "hidden hit", "hidden hits") << " from those bars "
+             << (discarded == 1 ? "was" : "were") << " replaced by the repeat.";
+    showStatus(text);
 }
 
 void GgdDrumEditor::duplicateToEmptySlot()
@@ -1503,7 +1551,6 @@ void GgdDrumEditor::copyPatternToSlot(int target)
     const auto name = fitPatternName(displayName(layer(), source) + " copy");
     layer().setPatternName(name.toRawUTF8(), target);
     auto& targetHistory = history[static_cast<size_t>(target)];
-    targetHistory.parked.clear();
     targetHistory.source = juce::File();
     commitSlotEdit(target);
     showStatus("Copied to slot " + juce::String(target + 1) + ". Click it to edit the copy.");
@@ -1519,9 +1566,9 @@ void GgdDrumEditor::clearSlot(int slot)
     ensureHistory(slot);
     auto* pattern = layer().getEventPattern(slot);
     pattern->clear(true);
+    pattern->clearParked();
     layer().setPatternName(SEQ_DEFAULT_PAT_NAME, slot);
     auto& slotHistory = history[static_cast<size_t>(slot)];
-    slotHistory.parked.clear();
     slotHistory.source = juce::File();
     commitSlotEdit(slot);
     showStatus("Slot " + juce::String(slot + 1) + " cleared. Open it and undo to bring it back.");
@@ -1567,7 +1614,6 @@ void GgdDrumEditor::setSyncMode(GgdTimeline::SyncMode mode)
 void GgdDrumEditor::showPatternMenu()
 {
     const auto& pattern = currentPattern();
-    const auto& slotHistory = history[static_cast<size_t>(currentSlot())];
     const bool hasHits = pattern.getEventCount() > 0;
     const bool canDouble = pattern.getBars() * 2
                         <= GgdPatternOps::maxBarsFor(pattern.getNumerator(), pattern.getDenominator());
@@ -1581,9 +1627,10 @@ void GgdDrumEditor::showPatternMenu()
     menu.addItem(4, "Import MIDI groove...");
     menu.addItem(5, "Export MIDI file...", hasHits);
     menu.addSeparator();
-    menu.addItem(6, "Clear pattern", hasHits || !slotHistory.parked.empty());
+    menu.addItem(6, "Clear pattern", hasHits || pattern.getParkedCount() > 0);
 
     auto safe = juce::Component::SafePointer<GgdDrumEditor>(this);
+    menu.setLookAndFeel(&lookAndFeel);
     menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(patternMenuButton).withMinimumWidth(230),
                        [safe](int result)
                        {
@@ -1624,6 +1671,7 @@ void GgdDrumEditor::showMoreMenu()
     menu.addItem(11, "Select the whole rows", count >= 1);
 
     auto safe = juce::Component::SafePointer<GgdDrumEditor>(this);
+    menu.setLookAndFeel(&lookAndFeel);
     menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(moreButton).withMinimumWidth(220),
                        [safe](int result)
                        {
@@ -1661,6 +1709,7 @@ void GgdDrumEditor::showSlotMenu(int slot)
     menu.addItem(3, "Clear slot", slotHasContent(slot));
 
     auto safe = juce::Component::SafePointer<GgdDrumEditor>(this);
+    menu.setLookAndFeel(&lookAndFeel);
     menu.showMenuAsync(juce::PopupMenu::Options().withMinimumWidth(220),
                        [safe, slot](int result)
                        {
@@ -1701,7 +1750,6 @@ void GgdDrumEditor::loadGroove(const juce::File& file)
 
     layer().setPatternName(fitPatternName(result.fileName).toRawUTF8(), slot);
     auto& slotHistory = history[static_cast<size_t>(slot)];
-    slotHistory.parked.clear();
     slotHistory.source = file;
     slotHistory.sourceIsPattern = false;
 
@@ -1725,7 +1773,6 @@ void GgdDrumEditor::loadPatternFile(const juce::File& file)
     const int slot = currentSlot();
     GgdPatternFile::restore(snapshot, ui(), project, GgdProject::drumLayer, slot);
     auto& slotHistory = history[static_cast<size_t>(slot)];
-    slotHistory.parked.clear();
     slotHistory.source = file;
     slotHistory.sourceIsPattern = true;
 
@@ -2017,10 +2064,12 @@ void GgdDrumEditor::refreshHeader()
     const auto& pattern = currentPattern();
     const int slot = currentSlot();
 
-    if (!patternName.hasKeyboardFocus(true))
+    // Leave text being typed alone, unless it belongs to another slot.
+    if (!patternName.hasKeyboardFocus(true) || nameFieldSlot != slot)
     {
         const auto name = nameOf(layer(), slot);
         patternName.setText(isDefaultName(name) ? juce::String() : name, false);
+        nameFieldSlot = slot;
     }
     patternName.setTextToShowWhenEmpty("Pattern " + juce::String(slot + 1) + " (click to name)",
                                        tc(GgdThemeRole::faint));
@@ -2029,12 +2078,13 @@ void GgdDrumEditor::refreshHeader()
     denominatorBox.setSelectedId(pattern.getDenominator(), juce::dontSendNotification);
     barsStepper->setValue(pattern.getBars(), GgdPatternOps::maxBarsFor(pattern.getNumerator(), pattern.getDenominator()));
 
-    const auto& parked = history[static_cast<size_t>(slot)].parked;
-    const bool showParked = !parked.empty();
+    const int parked = pattern.getParkedCount();
+    const bool showParked = parked > 0;
     if (showParked)
     {
-        parkedButton.setButtonText(juce::String(static_cast<int>(parked.size())) + " hidden");
-        parkedButton.setTooltip(plural(static_cast<int>(parked.size()), "hit sits", "hits sit")
+        parkedButton.setButtonText(juce::String(parked) + " hidden");
+        parkedButton.setColour(juce::TextButton::textColourOffId, tc(GgdThemeRole::warning));
+        parkedButton.setTooltip(plural(parked, "hit sits", "hits sit")
                                 + " outside the current meter or bar count. They come back if the pattern "
                                   "grows again. Click to discard them.");
     }
@@ -2263,6 +2313,11 @@ void GgdDrumEditor::resized()
 
 bool GgdDrumEditor::keyPressed(const juce::KeyPress& key)
 {
+    // Keys a text field did not use (Ctrl+D, Ctrl+Z after its own undo
+    // history...) must not edit the pattern behind it.
+    if (dynamic_cast<juce::TextEditor*>(juce::Component::getCurrentlyFocusedComponent()) != nullptr)
+        return false;
+
     // Keys that reach the editor itself (focus on a button, for example)
     // still drive the timeline.
     if (settingsPanel == nullptr && grid != nullptr)

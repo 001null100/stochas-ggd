@@ -35,11 +35,15 @@ public:
     void showTab(int index);
     int getCurrentTab() const { return currentTab; }
 
+    // The library settings file, shared by every open window so one window
+    // never overwrites another's folder choice.
+    struct SharedSettings;
+
 private:
     class BrowserPane;
     class TabButton;
 
-    std::unique_ptr<juce::PropertiesFile> settings;
+    juce::SharedResourcePointer<SharedSettings> settings;
     std::unique_ptr<BrowserPane> groovePane;
     std::unique_ptr<BrowserPane> patternPane;
     std::unique_ptr<TabButton> grooveTab;

@@ -527,6 +527,57 @@ bool GgdDrumGrid::removeEvent(const EventRef& ref)
     return p != nullptr && ref.valid() && p->removeEvent(storageRow(ref.row), ref.tick);
 }
 
+bool GgdDrumGrid::cellHasHit(int row, int cellTick) const
+{
+    // A hit is drawn in the cell of its nearest grid line, so off-grid hits
+    // (imported performances) count for the cell they appear in.
+    const auto* p = pattern();
+    if (p == nullptr || row < 0)
+        return false;
+    const int storage = storageRow(row);
+    const int from = cellTick - snapTicks / 2;
+    const int to = cellTick + snapTicks - snapTicks / 2;
+    for (int i = firstEventIndexAtOrAfter(*p, from); i < p->getEventCount(); ++i)
+    {
+        const auto* event = p->getEvent(i);
+        if (event->tick >= to)
+            break;
+        if (event->row == storage)
+            return true;
+    }
+    return false;
+}
+
+int GgdDrumGrid::visualRowNearestY(float y) const
+{
+    int index = 0;
+    int best = 0;
+    float bestDistance = std::numeric_limits<float>::max();
+    for (const auto& item : layout)
+    {
+        if (item.header)
+            continue;
+        const float distance = std::abs(y - (item.y + item.height * 0.5f));
+        if (distance < bestDistance)
+        {
+            bestDistance = distance;
+            best = index;
+        }
+        ++index;
+    }
+    return best;
+}
+
+void GgdDrumGrid::removeHitForGesture(const EventRef& hit)
+{
+    if (!removeEvent(hit))
+        return;
+    selection.erase(std::remove(selection.begin(), selection.end(), hit), selection.end());
+    gestureChanged = true;
+    processor.publishEdit(false);
+    repaint();
+}
+
 bool GgdDrumGrid::isSelected(const EventRef& ref) const
 {
     return std::find(selection.begin(), selection.end(), ref) != selection.end();
@@ -843,24 +894,33 @@ void GgdDrumGrid::humanizeSelection()
     if (selection.empty())
         return;
 
-    auto& random = juce::Random::getSystemRandom();
-    std::vector<EventState> states;
-    for (const auto& ref : selection)
-        states.push_back(stateOf(ref));
-    for (const auto& state : states)
-        removeEvent(state.ref);
+    auto* p = pattern();
+    if (p == nullptr)
+        return;
 
-    selection.clear();
+    // Every hit moves only into a free spot, so no hit can replace another.
+    auto& random = juce::Random::getSystemRandom();
     const int length = patternLengthTicks();
-    for (auto state : states)
+    bool changed = false;
+    for (auto& ref : selection)
     {
-        int tick = juce::jlimit(0, length - 1, state.ref.tick + random.nextInt(17) - 8);
-        state.velocity = juce::jlimit(1, 127, state.velocity + random.nextInt(9) - 4);
-        if (occupied(state.ref.row, tick))
-            tick = state.ref.tick;
-        if (writeEvent(state, state.ref.row, tick))
-            selection.push_back({ state.ref.row, tick });
+        const int storage = storageRow(ref.row);
+        if (auto* event = p->findEventPtr(storage, ref.tick))
+        {
+            const auto velocity = static_cast<std::uint8_t>(
+                juce::jlimit(1, 127, event->velocity + random.nextInt(9) - 4));
+            changed |= velocity != event->velocity;
+            event->velocity = velocity;
+        }
+        const int target = juce::jlimit(0, length - 1, ref.tick + random.nextInt(17) - 8);
+        if (target != ref.tick && !occupied(ref.row, target) && p->moveEvent(storage, ref.tick, storage, target))
+        {
+            ref.tick = target;
+            changed = true;
+        }
     }
+    if (!changed)
+        return;
     notifySelection();
     commitEdit();
 }
@@ -1200,7 +1260,7 @@ void GgdDrumGrid::paintCell(int row, int tick)
         return;
     lastPaintRow = row;
     lastPaintTick = tick;
-    if (occupied(row, tick))
+    if (cellHasHit(row, tick))
         return;
 
     EventState state;
@@ -1220,10 +1280,13 @@ void GgdDrumGrid::eraseAcross(int row, float fromX, float toX)
     if (p == nullptr || row < 0)
         return;
 
+    // Hits whose centre the pointer swept over, plus the hit under the
+    // pointer now. Neighbours the pointer never reached (a flam's grace
+    // note next to the hit that was clicked) stay.
     const int storage = storageRow(row);
-    const float lo = juce::jmin(fromX, toX) - 4.0f;
-    const float hi = juce::jmax(fromX, toX) + 4.0f;
-    const float halfWidth = hitWidth() * 0.5f + 3.0f;
+    const float lo = juce::jmin(fromX, toX);
+    const float hi = juce::jmax(fromX, toX);
+    const float halfWidth = hitWidth() * 0.5f;
     bool changed = false;
 
     for (int i = p->getEventCount() - 1; i >= 0; --i)
@@ -1232,7 +1295,7 @@ void GgdDrumGrid::eraseAcross(int row, float fromX, float toX)
         if (event->row != storage)
             continue;
         const float centre = hitCentreX(event->tick);
-        if (centre + halfWidth >= lo && centre - halfWidth <= hi)
+        if ((centre >= lo && centre <= hi) || std::abs(centre - toX) <= halfWidth)
         {
             const EventRef ref { row, event->tick };
             changed |= p->removeEvent(storage, event->tick);
@@ -1328,7 +1391,9 @@ void GgdDrumGrid::mouseDown(const juce::MouseEvent& e)
         {
             dragMode = DragMode::erase;
             lastEraseX = e.position.x;
-            eraseAcross(row, e.position.x, e.position.x);
+            eraseStarted = false;
+            if (hit.valid())
+                removeHitForGesture(hit);
             return;
         }
 
@@ -1352,10 +1417,11 @@ void GgdDrumGrid::mouseDown(const juce::MouseEvent& e)
 
         if (hit.valid())
         {
-            // Clicking a hit removes it; keep dragging to erase more.
+            // Clicking a hit removes exactly that hit; keep dragging to erase more.
             dragMode = DragMode::erase;
             lastEraseX = e.position.x;
-            eraseAcross(row, e.position.x, e.position.x);
+            eraseStarted = false;
+            removeHitForGesture(hit);
             return;
         }
 
@@ -1401,6 +1467,7 @@ void GgdDrumGrid::mouseDown(const juce::MouseEvent& e)
         duplicateDrag = mods.isAltDown();
         dragDeltaTicks = 0;
         dragDeltaRows = 0;
+        dragStartVisualRow = visualRowNearestY(e.position.y);
         dragStates.clear();
         for (const auto& ref : selection)
             dragStates.push_back(stateOf(ref));
@@ -1421,7 +1488,7 @@ void GgdDrumGrid::mouseDrag(const juce::MouseEvent& e)
         case DragMode::paint:
         {
             const int row = rowAtY(e.position.y);
-            if (row < 0 || overLabelColumn(e.position))
+            if (row < 0 || overLabelColumn(e.position) || overRuler(e.position))
                 return;
             const int target = cellTickForX(e.position.x);
             if (row == lastPaintRow && lastPaintTick >= 0 && target != lastPaintTick)
@@ -1440,8 +1507,14 @@ void GgdDrumGrid::mouseDrag(const juce::MouseEvent& e)
 
         case DragMode::erase:
         {
+            if (!eraseStarted)
+            {
+                if (e.position.getDistanceFrom(dragStart) < 4.0f)
+                    return;
+                eraseStarted = true;
+            }
             const int row = rowAtY(e.position.y);
-            if (row >= 0 && !overLabelColumn(e.position))
+            if (row >= 0 && !overLabelColumn(e.position) && !overRuler(e.position))
                 eraseAcross(row, lastEraseX, e.position.x);
             lastEraseX = e.position.x;
             return;
@@ -1542,7 +1615,8 @@ void GgdDrumGrid::mouseDrag(const juce::MouseEvent& e)
         {
             const int ticks = static_cast<int>(std::lround(
                 (e.position.x - dragStart.x) / pixelsPerTick() / snapTicks)) * snapTicks;
-            const int rows = static_cast<int>(std::lround((e.position.y - dragStart.y) / rowHeight));
+            // Group headers sit between rows, so count rows, not pixels.
+            const int rows = visualRowNearestY(e.position.y) - dragStartVisualRow;
             if (ticks != dragDeltaTicks || rows != dragDeltaRows)
             {
                 dragDeltaTicks = ticks;
@@ -1795,6 +1869,7 @@ void GgdDrumGrid::showContextMenu(juce::Point<float>)
     menu.addSeparator();
     menu.addItem(item(11, "Select all", command + "A", true));
 
+    menu.setLookAndFeel(&getLookAndFeel());
     auto safe = juce::Component::SafePointer<GgdDrumGrid>(this);
     menu.showMenuAsync(juce::PopupMenu::Options().withMinimumWidth(200).withMousePosition(),
                        [safe](int result)
@@ -2262,7 +2337,7 @@ void GgdDrumGrid::paintHover(juce::Graphics& g)
     const auto target = juce::Rectangle<float>(x + 1.5f, static_cast<float>(y) + 3.0f,
                                                juce::jmax(2.0f, w - 3.0f), static_cast<float>(rowHeight) - 7.0f);
     const auto colour = colourForRow(hoverRow);
-    const bool filled = occupied(hoverRow, hoverTick);
+    const bool filled = cellHasHit(hoverRow, hoverTick);
     g.setColour(colour.withAlpha(filled ? 0.06f : 0.10f));
     g.fillRoundedRectangle(target, 4.0f);
     g.setColour(colour.withAlpha(0.45f));

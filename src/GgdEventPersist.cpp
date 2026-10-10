@@ -58,6 +58,20 @@ void GgdEventPersist::store(const SequenceData& sequence, juce::XmlElement& root
                 patternElement->addChildElement(eventElement);
             }
 
+            // Hits hidden by a meter or bar change. Older builds ignore them.
+            for (int parkedIndex = 0; parkedIndex < pattern->getParkedCount(); ++parkedIndex)
+            {
+                const auto* hit = pattern->getParked(parkedIndex);
+                auto* parkedElement = new juce::XmlElement("parked");
+                parkedElement->setAttribute("bar", static_cast<int>(hit->bar));
+                parkedElement->setAttribute("offset", hit->offset);
+                parkedElement->setAttribute("row", static_cast<int>(hit->row));
+                parkedElement->setAttribute("velocity", static_cast<int>(hit->velocity));
+                parkedElement->setAttribute("probability", static_cast<int>(hit->probability));
+                parkedElement->setAttribute("duration", static_cast<int>(hit->durationTicks));
+                patternElement->addChildElement(parkedElement);
+            }
+
             layerElement->addChildElement(patternElement);
         }
 
@@ -113,6 +127,25 @@ bool GgdEventPersist::retrieve(SequenceData& sequence, const juce::XmlElement& r
                     eventElement->getIntAttribute("velocity", 100),
                     eventElement->getIntAttribute("probability", SEQ_PROB_ON),
                     eventElement->getIntAttribute("duration", GGD_DEFAULT_EVENT_DURATION_TICKS));
+            }
+
+            for (auto* parkedElement : patternElement->getChildWithTagNameIterator("parked"))
+            {
+                const int bar = parkedElement->getIntAttribute("bar", -1);
+                const int offset = parkedElement->getIntAttribute("offset", -1);
+                const int row = parkedElement->getIntAttribute("row", -1);
+                if (bar < 0 || bar >= GGD_MAX_PATTERN_BARS || offset < 0 || offset >= GGD_MAX_PATTERN_TICKS
+                    || row < 0 || row >= SEQ_MAX_ROWS)
+                    continue;
+
+                GgdParkedHit hit;
+                hit.bar = static_cast<std::int16_t>(bar);
+                hit.offset = offset;
+                hit.row = static_cast<std::uint8_t>(row);
+                hit.velocity = static_cast<std::uint8_t>(juce::jlimit(1, 127, parkedElement->getIntAttribute("velocity", 100)));
+                hit.probability = static_cast<std::int8_t>(juce::jlimit(0, 100, parkedElement->getIntAttribute("probability", SEQ_PROB_ON)));
+                hit.durationTicks = static_cast<std::uint16_t>(juce::jlimit(1, 65535, parkedElement->getIntAttribute("duration", GGD_DEFAULT_EVENT_DURATION_TICKS)));
+                pattern->addParked(hit);
             }
         }
     }

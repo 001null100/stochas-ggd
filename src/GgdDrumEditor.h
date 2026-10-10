@@ -67,7 +67,7 @@ private:
         int bars = 1;
         std::vector<GgdSequenceEvent> events;
         juce::String name;
-        std::vector<GgdPatternOps::ParkedHit> parked;
+        std::vector<GgdParkedHit> parked;
 
         // Not part of the content: restored alongside it.
         std::vector<std::pair<int, int>> selection;
@@ -83,7 +83,6 @@ private:
         std::deque<PatternState> redo;
         PatternState committed;
         bool valid = false;
-        std::vector<GgdPatternOps::ParkedHit> parked;
         juce::File source;
         bool sourceIsPattern = false;
     };
@@ -142,6 +141,7 @@ private:
 
     std::array<SlotHistory, SEQ_MAX_PATTERNS> history;
     bool restoringHistory = false;
+    int nameFieldSlot = -1; // slot whose name the name field shows
     int appliedTheme = -1;
 
     std::unique_ptr<juce::VBlankAttachment> vblank;
@@ -210,6 +210,7 @@ private:
     void setMeter(int numerator, int denominator);
     void setBars(int bars);
     void discardParkedHits();
+    void reportGeometryChange(const GgdPatternOps::GeometryChange& change);
     void renamePattern();
     void clearPattern();
     void doublePatternLength();

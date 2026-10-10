@@ -38,7 +38,7 @@ struct GgdEditorTestAccess
 
     static int parkedCount(GgdDrumEditor& e)
     {
-        return static_cast<int>(e.history[static_cast<size_t>(e.currentSlot())].parked.size());
+        return e.currentPattern().getParkedCount();
     }
 
     static int undoDepth(GgdDrumEditor& e)
@@ -52,6 +52,8 @@ struct GgdEditorTestAccess
         next.theme = theme;
         e.applyPreferences(next, false);
     }
+
+    static juce::Viewport& viewport(GgdDrumEditor& e) { return e.viewport; }
 
     static void showLibrary(GgdDrumEditor& e, bool show)
     {
@@ -416,6 +418,27 @@ public:
             expectEquals(target->getProject().getActiveMapIndex(loaded), 2);
             expect(drumLayer(*target).getMuted());
             expectEquals(drumLayer(*target).getCurrentPattern(), 2);
+        }
+
+        beginTest("Hidden hits are saved with the project");
+        {
+            auto source = makeProcessor();
+            fillDemoProject(*source);
+            auto* pattern = drumLayer(*source).getEventPattern(0);
+            const auto before = eventsOf(*source, 0);
+            const auto change = GgdPatternOps::changeGeometry(*pattern, 3, 4, 1);
+            expect(change.hidden > 0);
+            source->publishEdit(false);
+
+            juce::MemoryBlock state;
+            source->getStateInformation(state);
+            auto target = makeProcessor();
+            target->setStateInformation(state.getData(), static_cast<int>(state.getSize()));
+            auto* loaded = drumLayer(*target).getEventPattern(0);
+            expectEquals(loaded->getParkedCount(), pattern->getParkedCount());
+
+            GgdPatternOps::changeGeometry(*loaded, 4, 4, 2);
+            expect(sameEvents(eventsOf(*target, 0), before), "the reloaded pattern grows back to the original");
         }
 
         beginTest("Damaged project state never crashes or breaks the drum layer");
@@ -846,6 +869,101 @@ public:
                     juce::ModifierKeys(juce::ModifierKeys::altModifier | juce::ModifierKeys::leftButtonModifier));
             expect(f.layer().getEventPattern(0)->findEventPtr(storage, 5 * s) != nullptr, "original stays");
             expect(f.layer().getEventPattern(0)->findEventPtr(storage, 6 * s) != nullptr, "copy added");
+        }
+
+        beginTest("Clicking one hit of a flam removes only that hit");
+        {
+            EditorFixture f;
+            auto& grid = f.grid();
+            const auto& project = f.processor->getProject();
+            const int tom = project.findCanonicalRow("tom.rack_1.hit");
+            const int storage = project.storageRowForCanonical(tom);
+            auto* pattern = f.layer().getEventPattern(0);
+            pattern->addEvent(storage, 4 * s - 60, 70); // grace note
+            pattern->addEvent(storage, 4 * s, 110);
+            f.processor->publishEdit(false);
+
+            gesture(grid, { grid.getCellBounds(tom, 4 * s).getCentre() });
+            expect(pattern->findEvent(storage, 4 * s) < 0, "the clicked hit is gone");
+            expect(pattern->findEvent(storage, 4 * s - 60) >= 0, "the grace note stays");
+        }
+
+        beginTest("Painting over an off-grid hit does not double it");
+        {
+            EditorFixture f;
+            auto& grid = f.grid();
+            const auto& project = f.processor->getProject();
+            const int tom = project.findCanonicalRow("tom.floor_2.hit");
+            const int storage = project.storageRowForCanonical(tom);
+            auto* pattern = f.layer().getEventPattern(0);
+            pattern->addEvent(storage, s + 7, 90); // a slightly late imported hit
+            f.processor->publishEdit(false);
+            const int before = pattern->getEventCount();
+
+            gesture(grid, { grid.getCellBounds(tom, 0).getCentre(), grid.getCellBounds(tom, 4 * s).getCentre() });
+            expectEquals(pattern->getEventCount(), before + 4, "five cells, one already taken");
+            expect(pattern->findEvent(storage, s) < 0);
+        }
+
+        beginTest("Dragging across a group header lands on the row under the pointer");
+        {
+            EditorFixture f;
+            auto& grid = f.grid();
+            const auto& project = f.processor->getProject();
+            const int wires = project.findCanonicalRow("snare.wires_off");
+            const int rack = project.findCanonicalRow("tom.rack_1.hit");
+            auto* pattern = f.layer().getEventPattern(0);
+            pattern->addEvent(project.storageRowForCanonical(wires), 2 * s, 100);
+            f.processor->publishEdit(false);
+
+            grid.setToolMode(GgdDrumGrid::ToolMode::select);
+            gesture(grid, { grid.getCellBounds(wires, 2 * s).getCentre(), grid.getCellBounds(rack, 2 * s).getCentre() });
+            expect(pattern->findEvent(project.storageRowForCanonical(rack), 2 * s) >= 0, "on the first tom row");
+        }
+
+        beginTest("Paint strokes never reach rows hidden under the ruler");
+        {
+            EditorFixture f;
+            auto& editor = f.editor();
+            editor.setSize(1480, 860);
+            auto& grid = f.grid();
+            const auto& project = f.processor->getProject();
+            const int kick = project.findCanonicalRow("kick.hit");
+            const int cross = project.findCanonicalRow("snare.sidestick");
+            GgdEditorTestAccess::viewport(editor).setViewPosition(0, 60);
+            const int before = f.layer().getEventPattern(0)->getEventCount();
+
+            // Start on a visible row, then drift up into the ruler over the kick row.
+            const auto start = grid.getCellBounds(cross, 2 * s).getCentre();
+            const auto kickCell = grid.getCellBounds(kick, 3 * s);
+            expect(kickCell.getCentreY() < 60.0f + 44.0f, "the kick row is under the ruler");
+            gesture(grid, { start, juce::Point<float>(kickCell.getCentreX(), kickCell.getCentreY()) });
+            expect(f.layer().getEventPattern(0)->findEvent(project.storageRowForCanonical(kick), 3 * s) < 0);
+            expectEquals(f.layer().getEventPattern(0)->getEventCount(), before + 1, "only the visible cell");
+        }
+
+        beginTest("Humanize never loses a hit");
+        {
+            EditorFixture f;
+            auto& grid = f.grid();
+            const auto& project = f.processor->getProject();
+            const int tom = project.findCanonicalRow("tom.floor_1.hit");
+            const int storage = project.storageRowForCanonical(tom);
+            auto* pattern = f.layer().getEventPattern(0);
+            for (int i = 0; i < 6; ++i)
+                pattern->addEvent(storage, 8 * s + i * 4, 90); // a dense roll
+            f.processor->publishEdit(false);
+            const int before = pattern->getEventCount();
+
+            grid.setToolMode(GgdDrumGrid::ToolMode::select);
+            std::vector<std::pair<int, int>> roll;
+            for (int i = 0; i < 6; ++i)
+                roll.emplace_back(tom, 8 * s + i * 4);
+            grid.restoreSelectionCoordinates(roll);
+            for (int round = 0; round < 200; ++round)
+                grid.humanizeSelection();
+            expectEquals(pattern->getEventCount(), before);
+            expectEquals(grid.getSelectedCount(), 6);
         }
 
         beginTest("Clicking a row name auditions its note");

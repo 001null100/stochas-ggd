@@ -215,6 +215,8 @@ private:
     int lastPaintRow = -1;
     int lastPaintTick = -1;
     float lastEraseX = 0.0f;
+    bool eraseStarted = false;
+    int dragStartVisualRow = 0;
     std::vector<EventState> dragStates;
     int dragDeltaTicks = 0;
     int dragDeltaRows = 0;
@@ -291,6 +293,9 @@ private:
     EventRef hitAt(juce::Point<float> position) const;
     EventState stateOf(const EventRef& ref) const;
     bool occupied(int row, int tick) const;
+    bool cellHasHit(int row, int cellTick) const;
+    int visualRowNearestY(float y) const;
+    void removeHitForGesture(const EventRef& hit);
     bool writeEvent(const EventState& state, int row, int tick);
     bool removeEvent(const EventRef& ref);
     bool isSelected(const EventRef& ref) const;

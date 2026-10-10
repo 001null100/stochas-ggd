@@ -10,7 +10,7 @@ Version 2 fixes both:
 
 - **Patterns follow the host's bar lines.** Bar 1 of a pattern always starts on a host bar line, and the pattern's bar count follows the host's bar number. A meter change in the host never shifts the groove. A pattern bar shorter than the host bar rests until the next bar line; a longer one is cut at the bar line.
 - **Sync mode per project.** *Sync: Host bars* is the new default. *Sync: Free run* keeps the 1.x behaviour (the pattern loops on its own from the song start) for deliberate polymeter.
-- **Editing the meter keeps hits in their bars.** Every hit keeps its bar and its offset from the bar line. Hits that no longer fit (beat 4 of a bar that becomes 3/4, or bars beyond a shorter bar count) are hidden, not deleted, and return when the pattern grows again. The toolbar shows how many are hidden, with an option to discard them.
+- **Editing the meter keeps hits in their bars.** Every hit keeps its bar and its offset from the bar line. Hits that no longer fit (beat 4 of a bar that becomes 3/4, or bars beyond a shorter bar count) are hidden, not deleted, and return when the pattern grows again, even after the project is saved and reopened. The toolbar shows how many are hidden, with an option to discard them.
 - The transport display shows the host meter and warns when it differs from the pattern's, with a tooltip explaining what will happen.
 
 The scheduler was rewritten along with it: block windows chain seamlessly, so tempo automation and host position jitter can no longer drop or double a hit, nothing plays during host pre-roll, and a loop jump restarts cleanly.
@@ -42,7 +42,7 @@ The scheduler was rewritten along with it: block windows chain seamlessly, so te
 ## Under the hood
 
 - The editor and timeline are now one class each (`GgdDrumEditor`, `GgdDrumGrid`) instead of ten layered Beta/V1/Final files compiled through macro renaming.
-- Project state shrank from about 28 MB to 1.6 MB. The UI/audio double buffer waits for the audio thread before reusing a buffer, so the audio thread never reads a half-written pattern.
+- Project state shrank from about 28 MB to 2.4 MB. The UI/audio double buffer waits for the audio thread before reusing a buffer, so the audio thread never reads a half-written pattern.
 - Playhead and played-note feedback reach the editor through lock-free channels, and the playhead is drawn from the host position extrapolated to the display's refresh.
 - Pattern names are stored as proper UTF-8.
 - Automation overrides are atomic. The audio thread no longer asks the host to refresh its display.

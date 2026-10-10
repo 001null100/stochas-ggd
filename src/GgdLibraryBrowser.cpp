@@ -264,14 +264,36 @@ public:
 };
 
 //==============================================================================
+struct GgdLibraryBrowser::SharedSettings
+{
+    SharedSettings()
+    {
+        juce::PropertiesFile::Options options;
+        options.applicationName = "Stochas GGD";
+        options.filenameSuffix = "settings";
+        options.folderName = ggdSettingsFolderName();
+        options.osxLibrarySubFolder = "Application Support";
+        options.storageFormat = juce::PropertiesFile::storeAsXML;
+        options.millisecondsBeforeSaving = 500;
+        file = std::make_unique<juce::PropertiesFile>(options);
+    }
+
+    ~SharedSettings() { file->saveIfNeeded(); }
+
+    std::unique_ptr<juce::PropertiesFile> file;
+};
+
+//==============================================================================
 class GgdLibraryBrowser::BrowserPane final : public juce::Component,
-                                             private juce::Timer
+                                             private juce::Timer,
+                                             private juce::ChangeListener
 {
 public:
     BrowserPane(juce::PropertiesFile& propertyStore, juce::String propertyKey, bool patternMode)
         : properties(propertyStore), key(std::move(propertyKey)), patterns(patternMode)
     {
         root = juce::File(properties.getValue(key));
+        properties.addChangeListener(this);
 
         folderButton.setTooltip(patterns ? "Choose the folder that holds your Stochas GGD patterns"
                                          : "Choose the folder that holds your GGD MIDI grooves");
@@ -322,6 +344,7 @@ public:
 
     ~BrowserPane() override
     {
+        properties.removeChangeListener(this);
         stopTimer();
         tree.setRootItem(nullptr);
     }
@@ -544,6 +567,17 @@ private:
         rebuildTree();
     }
 
+    // Another window chose a different folder.
+    void changeListenerCallback(juce::ChangeBroadcaster*) override
+    {
+        const juce::File chosen(properties.getValue(key));
+        if (chosen != root)
+        {
+            root = chosen;
+            refresh();
+        }
+    }
+
     void rebuildIndex()
     {
         indexedFiles.clear();
@@ -584,16 +618,8 @@ private:
 //==============================================================================
 GgdLibraryBrowser::GgdLibraryBrowser()
 {
-    juce::PropertiesFile::Options options;
-    options.applicationName = "Stochas GGD";
-    options.filenameSuffix = "settings";
-    options.folderName = ggdSettingsFolderName();
-    options.osxLibrarySubFolder = "Application Support";
-    options.storageFormat = juce::PropertiesFile::storeAsXML;
-    settings = std::make_unique<juce::PropertiesFile>(options);
-
-    groovePane = std::make_unique<BrowserPane>(*settings, "grooveRoot", false);
-    patternPane = std::make_unique<BrowserPane>(*settings, "patternRoot", true);
+    groovePane = std::make_unique<BrowserPane>(*settings->file, "grooveRoot", false);
+    patternPane = std::make_unique<BrowserPane>(*settings->file, "patternRoot", true);
     addChildComponent(*groovePane);
     addChildComponent(*patternPane);
 
@@ -606,7 +632,7 @@ GgdLibraryBrowser::GgdLibraryBrowser()
     addAndMakeVisible(*grooveTab);
     addAndMakeVisible(*patternTab);
 
-    showTab(juce::jlimit(0, 1, settings->getIntValue("libraryTab", 0)));
+    showTab(juce::jlimit(0, 1, settings->file->getIntValue("libraryTab", 0)));
 }
 
 GgdLibraryBrowser::~GgdLibraryBrowser() = default;
@@ -618,8 +644,9 @@ void GgdLibraryBrowser::showTab(int index)
     patternTab->setToggleState(currentTab == 1, juce::dontSendNotification);
     groovePane->setVisible(currentTab == 0);
     patternPane->setVisible(currentTab == 1);
-    if (settings->getIntValue("libraryTab", 0) != currentTab)
-        settings->setValue("libraryTab", currentTab);
+    auto& file = *settings->file;
+    if (file.getIntValue("libraryTab", 0) != currentTab)
+        file.setValue("libraryTab", currentTab);
 }
 
 void GgdLibraryBrowser::paint(juce::Graphics& g)

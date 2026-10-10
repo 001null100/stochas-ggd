@@ -3,19 +3,33 @@
 namespace
 {
 constexpr const char* rootTag = "ggd-event-state";
+
+// Version 1 is understood by every Stochas GGD release. New information is
+// added as optional attributes so older builds can still open newer projects.
 constexpr int stateVersion = 1;
+
+const char* syncModeToken(GgdTimeline::SyncMode mode)
+{
+    return mode == GgdTimeline::SyncMode::free ? "free" : "bars";
+}
+
+GgdTimeline::SyncMode syncModeFromToken(const juce::String& token)
+{
+    return token == "free" ? GgdTimeline::SyncMode::free : GgdTimeline::SyncMode::hostBars;
+}
 }
 
 void GgdEventPersist::store(const SequenceData& sequence, juce::XmlElement& root)
 {
-    auto* beta = new juce::XmlElement(rootTag);
-    beta->setAttribute("version", stateVersion);
-    beta->setAttribute("ppq", GGD_EVENT_PPQ);
+    auto* state = new juce::XmlElement(rootTag);
+    state->setAttribute("version", stateVersion);
+    state->setAttribute("ppq", GGD_EVENT_PPQ);
+    state->setAttribute("sync", syncModeToken(sequence.getSyncMode()));
 
     for (int layerIndex = 0; layerIndex < SEQ_MAX_LAYERS; ++layerIndex)
     {
-        auto* layer = const_cast<SequenceData&>(sequence).getLayer(layerIndex);
-        auto* layerElement = new juce::XmlElement("layer");
+        const auto* layer = sequence.getLayer(layerIndex);
+        auto layerElement = std::make_unique<juce::XmlElement>("layer");
         layerElement->setAttribute("idx", layerIndex);
         bool havePattern = false;
 
@@ -35,9 +49,6 @@ void GgdEventPersist::store(const SequenceData& sequence, juce::XmlElement& root
             for (int eventIndex = 0; eventIndex < pattern->getEventCount(); ++eventIndex)
             {
                 const auto* event = pattern->getEvent(eventIndex);
-                if (event == nullptr)
-                    continue;
-
                 auto* eventElement = new juce::XmlElement("event");
                 eventElement->setAttribute("tick", event->tick);
                 eventElement->setAttribute("row", static_cast<int>(event->row));
@@ -51,24 +62,24 @@ void GgdEventPersist::store(const SequenceData& sequence, juce::XmlElement& root
         }
 
         if (havePattern)
-            beta->addChildElement(layerElement);
-        else
-            delete layerElement;
+            state->addChildElement(layerElement.release());
     }
 
-    root.addChildElement(beta);
+    root.addChildElement(state);
 }
 
 bool GgdEventPersist::retrieve(SequenceData& sequence, const juce::XmlElement& root)
 {
-    const auto* beta = root.getChildByName(rootTag);
-    if (beta == nullptr)
+    const auto* state = root.getChildByName(rootTag);
+    if (state == nullptr)
         return false;
 
-    if (beta->getIntAttribute("version", -1) != stateVersion)
+    if (state->getIntAttribute("version", -1) != stateVersion)
         return false;
 
-    for (auto* layerElement : beta->getChildWithTagNameIterator("layer"))
+    sequence.setSyncMode(syncModeFromToken(state->getStringAttribute("sync", "bars")));
+
+    for (auto* layerElement : state->getChildWithTagNameIterator("layer"))
     {
         const int layerIndex = layerElement->getIntAttribute("idx", -1);
         if (layerIndex < 0 || layerIndex >= SEQ_MAX_LAYERS)

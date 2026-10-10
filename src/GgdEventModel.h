@@ -4,8 +4,7 @@
 
 #include <cstdint>
 
-// Musical positions in the beta event engine are stored independently of any
-// editor grid. 960 ticks per quarter note exactly represents the straight and
+// Musical positions are stored independently of any editor grid. 960 ticks per quarter note exactly represents the straight and
 // triplet divisions we care about (1/32 = 120, 1/8T = 320, 1/16T = 160) while
 // retaining enough resolution for imported performance timing.
 constexpr int GGD_EVENT_PPQ = 960;
@@ -15,6 +14,9 @@ constexpr int GGD_TICKS_PER_8TH_TRIPLET = GGD_EVENT_PPQ / 3;
 constexpr int GGD_TICKS_PER_16TH_TRIPLET = GGD_EVENT_PPQ / 6;
 constexpr int GGD_DEFAULT_EVENT_DURATION_TICKS = GGD_TICKS_PER_32ND;
 constexpr int GGD_MAX_EVENTS_PER_PATTERN = 4096;
+constexpr int GGD_MAX_PATTERN_BARS = 64;
+// 1024 sixteenths: 64 bars of 4/4.
+constexpr int GGD_MAX_PATTERN_TICKS = 1024 * GGD_TICKS_PER_16TH;
 
 struct GgdSequenceEvent
 {
@@ -43,6 +45,10 @@ public:
     void setGeometry(int newNumerator, int newDenominator, int newBars);
 
     int getLengthTicks() const;
+    int getBarTicks() const { return barTicksFor(numerator, denominator); }
+
+    // Ticks in one bar of numerator/denominator at GGD_EVENT_PPQ.
+    static int barTicksFor(int numerator, int denominator);
     int getEventCount() const { return eventCount; }
     const GgdSequenceEvent* getEvent(int index) const;
     GgdSequenceEvent* getEvent(int index);

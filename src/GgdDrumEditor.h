@@ -1,64 +1,35 @@
 #pragma once
 
 #include "PluginProcessor.h"
-#include "GgdKitMap.h"
-#include "GgdMidiImporter.h"
-#include "GgdMidiExporter.h"
-#include "GgdPatternFile.h"
+#include "GgdDrumGrid.h"
 #include "GgdLibraryBrowser.h"
+#include "GgdPatternOps.h"
+#include "GgdSettingsPanel.h"
 #include "GgdUiTheme.h"
 
 #include <array>
-#include <cstdint>
 #include <deque>
-#include <functional>
-#include <optional>
-#include <unordered_map>
-#include <utility>
+#include <memory>
 #include <vector>
 
-#ifdef SEQCTL_MIDI_RESPOND_NO
-#undef SEQCTL_MIDI_RESPOND_NO
-#define SEQCTL_MIDI_RESPOND_NO SEQ_MIDI_RESPOND_NO
-#endif
-
-class GgdDrumGrid;
-
-class GgdMidiDragButton final : public juce::TextButton
-{
-public:
-    using juce::TextButton::TextButton;
-
-    std::function<void(juce::Component*)> onBeginDrag;
-
-    void mouseDown(const juce::MouseEvent& e) override
-    {
-        dragStarted = false;
-        juce::TextButton::mouseDown(e);
-    }
-
-    void mouseDrag(const juce::MouseEvent& e) override
-    {
-        if (!dragStarted && e.getDistanceFromDragStart() >= 5)
-        {
-            dragStarted = true;
-            if (onBeginDrag)
-                onBeginDrag(this);
-        }
-    }
-
-    void mouseUp(const juce::MouseEvent& e) override
-    {
-        juce::TextButton::mouseUp(e);
-        dragStarted = false;
-    }
-
-private:
-    bool dragStarted = false;
-};
-
-class GgdDrumEditor : public juce::AudioProcessorEditor,
-                      private juce::Timer
+// The Stochas GGD plug-in window.
+//
+//   +--------------------------------------------------------------+
+//   | brand | pattern slots | name | Pattern | transport | output  |
+//   | tools | undo | meter | bars | grid | zoom      | kit | sync   |
+//   +--------------------------------------------+-----------------+
+//   |                 drum timeline              |     library     |
+//   +--------------------------------------------+                 |
+//   | selection tools / hints / status           |                 |
+//   +--------------------------------------------+-----------------+
+//
+// The editor edits the UI copy of the project (processor.mData) and publishes
+// every committed change to the audio thread. Each pattern slot keeps its own
+// undo history; meter and bar changes park hits that no longer fit so they
+// come back when the pattern grows again.
+class GgdDrumEditor final : public juce::AudioProcessorEditor,
+                            private juce::Timer,
+                            private juce::ChangeListener
 {
 public:
     explicit GgdDrumEditor(SeqAudioProcessor& processor);
@@ -68,196 +39,216 @@ public:
     void resized() override;
     bool keyPressed(const juce::KeyPress& key) override;
 
+    // Runs one display frame (playhead, feedback, follow). Called from the
+    // display's vertical blank; public for the offscreen snapshot tool.
+    void renderFrame();
+
+    // Developer hooks used by the snapshot tool and tests.
+    GgdDrumGrid& getGrid() { return *grid; }
+    void openSettings();
+    void closeSettings();
+    void selectPatternSlot(int slot);
+    void setSyncMode(GgdTimeline::SyncMode mode);
+    void showStatus(const juce::String& text);
+
 private:
+    friend struct GgdEditorTestAccess;
+
+    class SlotStrip;
+    class BarsStepper;
+    class TransportDisplay;
+    class MidiDragButton;
+
+    // One entry of a slot's undo history.
+    struct PatternState
+    {
+        int numerator = 4;
+        int denominator = 4;
+        int bars = 1;
+        std::vector<GgdSequenceEvent> events;
+        juce::String name;
+        std::vector<GgdPatternOps::ParkedHit> parked;
+
+        // Not part of the content: restored alongside it.
+        std::vector<std::pair<int, int>> selection;
+        juce::File source;
+        bool sourceIsPattern = false;
+
+        bool sameContent(const PatternState& other) const;
+    };
+
+    struct SlotHistory
+    {
+        std::deque<PatternState> undo;
+        std::deque<PatternState> redo;
+        PatternState committed;
+        bool valid = false;
+        std::vector<GgdPatternOps::ParkedHit> parked;
+        juce::File source;
+        bool sourceIsPattern = false;
+    };
+
     SeqAudioProcessor& processor;
+    const GgdProject& project;
     GgdLookAndFeel lookAndFeel;
+    juce::SharedResourcePointer<GgdPreferenceStore> preferenceStore;
+    GgdPreferences prefs;
+    juce::TooltipWindow tooltips { this, 650 };
 
-    juce::Array<GgdKitMap> maps;
-    juce::Array<GgdCanonicalRow> canonicalRows;
-    int activeMapIndex = 0;
-    int timeSigNumerator = 4;
-    int timeSigDenominator = 4;
-    int activeBars = 1;
-    int gridTicks = GGD_TICKS_PER_16TH;
-    bool tripletMode = false;
-    bool beta2UiInitialised = false;
-    bool beta3UiInitialised = false;
-    bool beta4UiInitialised = false;
-    bool beta6UiInitialised = false;
-    bool v1UiInitialised = false;
-
-    bool followPlayhead = true;
-    bool smoothPlayhead = true;
-    bool playheadGlow = true;
-    bool autoFineGrid = true;
-    bool shiftHoverVelocityInspector = true;
-    bool articulationAudition = true;
-    int followMarginPercent = 8; // retained only for Beta 6 preference migration
-    int followScrollTargetX = -1;
-    float lastFollowPlayheadX = -1.0f;
-    int followBaseGridWidth = -1;
-
-    juce::Label productLabel;
-    juce::Label transportStatus;
-    juce::Label hintLabel;
-    juce::Label selectionStatusLabel;
-    juce::Label meterLabel;
-    juce::Label meterSlash;
-    juce::Label barsLabel;
-    juce::Label gridLabel;
-    juce::Label zoomLabel;
-    juce::Label zoomValueLabel;
-    juce::Label probabilityLabel;
-    juce::ComboBox kitSelector;
-    juce::ComboBox patternSelector;
-    juce::ComboBox numeratorSelector;
-    juce::ComboBox denominatorSelector;
-    juce::ComboBox gridSelector;
-    juce::ComboBox probabilitySelector;
-    juce::ComboBox themeSelector;
-    juce::TextEditor barsEditor;
+    // header, row 1
+    std::unique_ptr<SlotStrip> slotStrip;
     juce::TextEditor patternName;
-    juce::TextButton drawModeButton { "Draw" };
-    juce::TextButton selectModeButton { "Select" };
-    juce::TextButton undoButton { "Undo" };
-    juce::TextButton redoButton { "Redo" };
-    juce::TextButton clearButton { "Clear" };
-    juce::TextButton importMidiButton { "Import MIDI" };
-    GgdMidiDragButton exportMidiButton { "Drag MIDI" };
-    juce::TextButton tripletModeButton { "Triplet" };
-    juce::TextButton fitZoomButton { "125%" };
-    juce::TextButton selectAllButton { "All" };
-    juce::TextButton copyButton { "Copy" };
-    juce::TextButton pasteButton { "Paste" };
-    juce::TextButton velocityDownButton { "Vel -" };
-    juce::TextButton velocityUpButton { "Vel +" };
-    juce::TextButton ghostButton { "Ghost" };
-    juce::TextButton accentButton { "Accent" };
-    juce::TextButton probability25Button { "P25" };
-    juce::TextButton probability50Button { "P50" };
-    juce::TextButton probability75Button { "P75" };
-    juce::TextButton probability100Button { "P100" };
-    juce::TextButton timingEarlierButton { "Earlier" };
-    juce::TextButton timingResetButton { "Quantize" };
-    juce::TextButton timingLaterButton { "Later" };
-    juce::TextButton humanizeButton { "Humanize" };
-    juce::TextButton flamButton { "Flam" };
-    juce::TextButton doubleButton { "Double" };
-    juce::TextButton deleteSelectionButton { "Delete" };
-    juce::TextButton patternActionsButton { "Pattern" };
+    GgdButton patternMenuButton { "Pattern", GgdIcon::menu };
+    std::unique_ptr<TransportDisplay> transport;
+    GgdButton outputButton { "Seq On", GgdIcon::power };
+    std::unique_ptr<MidiDragButton> dragButton;
+    GgdButton libraryButton { {}, GgdIcon::folder };
+    GgdButton settingsButton { {}, GgdIcon::settings };
+
+    // header, row 2
+    GgdButton drawButton { "Draw", GgdIcon::pencil };
+    GgdButton selectButton { "Select", GgdIcon::pointer };
+    GgdButton undoButton { {}, GgdIcon::undo };
+    GgdButton redoButton { {}, GgdIcon::redo };
+    juce::ComboBox numeratorBox;
+    juce::ComboBox denominatorBox;
+    std::unique_ptr<BarsStepper> barsStepper;
+    GgdButton parkedButton { {}, GgdIcon::warning };
+    juce::ComboBox gridBox;
     juce::Slider zoomSlider;
-    juce::Viewport gridViewport;
+    GgdButton zoomValueButton { "125%" };
+    GgdButton fitButton { {}, GgdIcon::fit };
+    juce::ComboBox kitBox;
+    juce::ComboBox syncBox;
+
+    // timeline
+    juce::Viewport viewport;
     std::unique_ptr<GgdDrumGrid> grid;
-    std::unique_ptr<GgdLibraryBrowser> libraryBrowser;
-    std::unique_ptr<juce::PropertiesFile> appearanceSettings;
-    std::unique_ptr<juce::Component> settingsOverlay;
-    std::unique_ptr<juce::FileChooser> midiFileChooser;
-    std::unique_ptr<juce::FileChooser> midiExportChooser;
-    std::unique_ptr<juce::FileChooser> patternSaveChooser;
-    juce::File midiDragTempFile;
 
-    std::deque<GgdPatternSnapshot> undoHistory;
-    std::deque<GgdPatternSnapshot> redoHistory;
-    std::optional<GgdPatternSnapshot> lastCommittedSnapshot;
-    std::unordered_map<std::uint64_t, std::vector<std::pair<int, int>>> selectionByFingerprint;
-    std::array<std::uint64_t, SEQ_MAX_PATTERNS> cleanPatternFingerprints {};
-    std::array<bool, SEQ_MAX_PATTERNS> cleanPatternFingerprintValid {};
+    // context strip
+    GgdButton ghostButton { "Ghost" };
+    GgdButton accentButton { "Accent" };
+    std::array<GgdButton, 4> chanceButtons;
+    GgdButton quantizeButton { "Quantize" };
+    GgdButton humanizeButton { "Humanize" };
+    GgdButton flamButton { "Flam" };
+    GgdButton doubleButton { "Double" };
+    GgdButton moreButton { "More" };
+    GgdButton deleteButton { "Delete" };
+
+    std::unique_ptr<GgdLibraryBrowser> browser;
+    std::unique_ptr<GgdSettingsPanel> settingsPanel;
+    std::unique_ptr<juce::FileChooser> chooser;
+    juce::File dragTempFile;
+
+    std::array<SlotHistory, SEQ_MAX_PATTERNS> history;
     bool restoringHistory = false;
-    double lastUndoMs = -1000.0;
-    double lastRedoMs = -1000.0;
+    int appliedTheme = -1;
 
-    static constexpr int topAreaHeight = 112;
-    static constexpr int bottomAreaHeight = 72;
-    static constexpr int browserWidth = 310;
-    static constexpr size_t maxHistoryDepth = 24;
-    static constexpr int maxPatternTicks = SEQ_MAX_STEPS * GGD_TICKS_PER_16TH;
+    std::unique_ptr<juce::VBlankAttachment> vblank;
+    double lastFrameMs = 0.0;
+    bool focusGivenToGrid = false;
 
+    // playhead follow
+    int followSetViewX = -1;
+    double followPausedUntilMs = 0.0;
+    bool followPadded = false;
+
+    // transport / host
+    bool transportPlaying = false;
+    int playingSlot = -1;
+    bool hostMeterKnown = false;
+    int hostNumerator = 4;
+    int hostDenominator = 4;
+
+    juce::String statusText;
+    double statusUntilMs = 0.0;
+    juce::Rectangle<int> brandArea;
+    juce::Rectangle<int> meterSlashArea;
+    juce::Rectangle<int> contextArea;
+    juce::Rectangle<int> hintArea;
+    juce::Rectangle<int> selectionInfoArea;
+
+    static constexpr int row1Height = 52;
+    static constexpr int row2Height = 46;
+    static constexpr int headerHeight = row1Height + row2Height;
+    static constexpr int contextHeight = 50;
+    static constexpr size_t maxHistory = 64;
+
+    // model access
+    SequenceData& ui() const { return *processor.mData.getUISeqData(); }
+    SequenceLayer& layer() const { return *ui().getLayer(GgdProject::drumLayer); }
+    int currentSlot() const { return layer().getCurrentPattern(); }
+    GgdEventPattern& currentPattern() const { return *layer().getEventPattern(currentSlot()); }
+    const GgdKitMap* activeMap() const { return project.getActiveMap(ui()); }
+
+    // frame and housekeeping
     void timerCallback() override;
-    void configureLookAndFeel();
-    void initialiseDrumState();
-    void applyActiveMapBindings(bool publish);
-    void applyPatternGeometry(bool publish = true);
-    void loadGeometryFromCurrentPattern();
-    void refreshControlsFromModel();
-    void commitBarCountEditor();
-    void refreshPatternSelectorLabels();
-    void refreshZoomControls(float scale);
-    void setActiveMap(int index);
-    void setGridTicks(int ticks);
-    void updateGridResolutionForZoom(float scale);
-    juce::String currentGridText() const;
-    void initialiseBeta2Ui();
-    void initialiseBeta3Ui();
-    void initialiseBeta4Ui();
-    void initialiseBeta6Ui();
-    void initialiseV1Ui();
-    void applyBeta4Theme(GgdThemeId theme, bool persist);
-    void applyBeta6Preferences(bool persist);
-    void applyV1InteractionPreferences(bool persist);
-    void showSettingsDialog();
-    void showSettingsDialogV1();
-    void closeSettingsDialog();
-    void updatePlayheadFollow(int playPosition);
-    void updateSelectionPropertyControls();
-    void handleGridSelectionChangedV1();
+    void changeListenerCallback(juce::ChangeBroadcaster*) override;
+    void reloadFromProcessor();
+    void updateTransport();
+    void updatePlayheadFollow();
 
-    GgdPatternSnapshot capturePattern(int pattern) const;
-    GgdPatternSnapshot captureCurrentPattern() const;
-    void restorePatternSnapshot(const GgdPatternSnapshot& snapshot, bool publish = true);
-    void recordCommittedPatternEdit();
-    void resetHistoryForCurrentPattern(bool markClean);
-    void initialiseCleanPatternFingerprints();
-    void markCurrentPatternClean();
-    bool currentPatternHasChanges() const;
-    void performUndo();
-    void performRedo();
-    void performUndoV1();
-    void performRedoV1();
-    void rememberCurrentSelectionV1();
+    // preferences
+    void applyPreferences(const GgdPreferences& preferences, bool save);
+    int effectiveGridTicks() const;
+    void setBaseGrid(int ticks);
 
-    void chooseMidiFile();
-    void importMidiFile(const juce::File& file);
-    void applyMidiImport(const GgdMidiImportResult& result, const juce::File& sourceFile);
-    void exportCurrentPatternMidi();
-    void beginMidiDragV1(juce::Component* source);
-    void requestLoadGroove(const juce::File& file);
-    void requestLoadPattern(const juce::File& file);
-    void applyPatternFile(const juce::File& file, const GgdPatternSnapshot& snapshot);
-    void saveCurrentPatternToLibrary();
-    void requestPatternReplacement(const juce::String& description,
-                                   std::function<void()> replacement);
+    // edits and history
+    PatternState capture(int slot) const;
+    bool liveMatches(const PatternState& state, int slot) const;
+    void restore(int slot, const PatternState& state);
+    void ensureHistory(int slot);
+    void commitEdit();
+    void commitSlotEdit(int slot);
+    void applyHistoryState(int slot, const PatternState& state);
+    void handleSelectionChanged();
+    void undo();
+    void redo();
+    void resetHistories();
 
-    void showPatternActions();
-    void showPatternActionsV1();
-    void duplicateCurrentPatternSlot();
-    bool currentPatternSlotIsEmpty(int pattern) const;
-    void updateContextStrip();
+    // pattern operations
+    void setMeter(int numerator, int denominator);
+    void setBars(int bars);
+    void discardParkedHits();
+    void renamePattern();
+    void clearPattern();
+    void doublePatternLength();
+    void duplicateToEmptySlot();
+    void copyPatternToSlot(int target);
+    void clearSlot(int slot);
+    void toggleOutput();
+    void setKit(int index);
+    void showPatternMenu();
+    void showMoreMenu();
+    void showSlotMenu(int slot);
 
-    void publishModelChange(bool recordHistory = true);
-    void clearCurrentPattern();
-    void updatePersistenceTag();
-    juce::String mapPersistenceToken(const GgdKitMap& map) const;
-    int mapIndexFromLayerName(const juce::String& layerName) const;
-    bool parseMeterFromLayerName(const juce::String& layerName,
-                                 int& numerator,
-                                 int& denominator) const;
+    // files
+    void loadGroove(const juce::File& file);
+    void loadPatternFile(const juce::File& file);
+    void chooseMidiToImport();
+    void savePatternToLibrary();
+    void exportMidiFile();
+    void beginMidiDrag(juce::Component* source);
+    juce::String currentPatternFileName() const;
+    void showAlert(const juce::String& title, const juce::String& message);
+    void focusGrid();
+    void updateBrowserHighlight();
 
-    void paintLegacy(juce::Graphics& g);
-    void resizedLegacy();
-    bool keyPressedLegacy(const juce::KeyPress& key);
-    void timerCallbackLegacy();
-
-    // Beta 7 compiles Beta 6 as a compatibility layer and replaces only the
-    // settings entry point and playhead-follow policy.
-    void initialiseBeta6UiLegacy();
-    void showSettingsDialogLegacy();
-    void updatePlayheadFollowLegacy(int playPosition);
-
-    // Final 1.0 wraps the RC implementation so the proven host drag/history
-    // behavior stays intact while configuration and output control can evolve.
-    void initialiseV1UiLegacy();
-    void applyV1InteractionPreferencesLegacy(bool persist);
-    void showSettingsDialogV1Legacy();
+    // presentation
+    void refreshAll();
+    void refreshHeader();
+    void refreshSlots();
+    void refreshHistoryButtons();
+    void refreshContextStrip();
+    void refreshZoomControls();
+    void layoutContextStrip();
+    void layoutViewport();
+    void paintHeader(juce::Graphics& g);
+    void paintContextStrip(juce::Graphics& g);
+    juce::String slotTooltip(int slot) const;
+    bool slotHasContent(int slot) const;
+    static juce::String shortcut(const juce::String& keys);
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(GgdDrumEditor)
 };

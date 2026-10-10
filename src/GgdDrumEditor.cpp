@@ -1,1496 +1,2450 @@
 #include "GgdDrumEditor.h"
+#include "GgdMidiExporter.h"
+#include "GgdMidiImporter.h"
+#include "GgdPatternFile.h"
 
 #include <algorithm>
 #include <cmath>
-#include <functional>
-#include <iterator>
-#include <vector>
 
 namespace
 {
-constexpr juce::uint32 bg       = 0xff101316;
-constexpr juce::uint32 panel    = 0xff171b1f;
-constexpr juce::uint32 panel2   = 0xff1c2126;
-constexpr juce::uint32 border   = 0xff2a3138;
-constexpr juce::uint32 text     = 0xffe6ebef;
-constexpr juce::uint32 muted    = 0xff8e9aa5;
-constexpr juce::uint32 accent   = 0xff70d6c1;
-constexpr juce::uint32 accent2  = 0xff449f91;
-
-constexpr int maxUserBars = 8;
-
-juce::Colour c(juce::uint32 value) { return juce::Colour(value); }
-
-int activeStorageRowCount(int canonicalCount)
+juce::Colour tc(GgdThemeRole role)
 {
-    return juce::jlimit(SEQ_MIN_ROWS, SEQ_MAX_ROWS, canonicalCount);
+    return ggdThemeColour(role);
 }
 
-int storageRowForCanonical(int canonicalRow, int canonicalCount)
+double nowMs()
 {
-    const int rowCount = activeStorageRowCount(canonicalCount);
-    return (SEQ_MAX_ROWS - rowCount) + canonicalRow;
+    return juce::Time::getMillisecondCounterHiRes();
 }
 
-int stepsPerBarForMeter(int numerator, int denominator)
+struct GridChoice
 {
-    return juce::jmax(1, numerator * 16 / denominator);
-}
+    int ticks;
+    const char* name;
+};
 
-int clockDividerForMeter(int denominator)
+constexpr GridChoice gridChoices[] = {
+    { GGD_EVENT_PPQ / 2, "1/8" },
+    { GGD_TICKS_PER_16TH, "1/16" },
+    { GGD_TICKS_PER_32ND, "1/32" },
+    { GGD_TICKS_PER_8TH_TRIPLET, "1/8T" },
+    { GGD_TICKS_PER_16TH_TRIPLET, "1/16T" },
+    { GGD_EVENT_PPQ / 12, "1/32T" },
+};
+
+juce::String gridName(int ticks)
 {
-    // With mStepsPerMeasure == numerator this keeps the underlying storage
-    // grid at one step per sixteenth while still letting StochaEngine follow
-    // 4/x, 8/x and 16/x host meters correctly.
-    return juce::jlimit(SEQ_MIN_CLOCK_DIV, SEQ_MAX_CLOCK_DIV, 256 / denominator);
+    for (const auto& choice : gridChoices)
+        if (choice.ticks == ticks)
+            return choice.name;
+    return "1/16";
 }
 
-bool isUndoKey(const juce::KeyPress& key)
+// The grid used when zoomed in far enough for "finer grid" to kick in.
+int finerGrid(int ticks)
 {
-    const auto mods = key.getModifiers();
-    return (mods.isCtrlDown() || mods.isCommandDown())
-        && !mods.isAltDown()
-        && key.getKeyCode() == 'Z';
+    if (ticks == GGD_TICKS_PER_32ND || ticks == GGD_EVENT_PPQ / 12)
+        return ticks;
+    return ticks / 2;
 }
 
-// The first GGD editor build stored semantic rows at 0..N. StochaEngine does
-// not scan those rows when maxRows is N: it scans the last N storage rows.
-// Move any existing v0 patterns into the range the engine actually plays.
-void migrateLegacyGgdRows(SequenceLayer* layer, int canonicalCount)
+constexpr float fineGridZoom = 3.5f;
+constexpr int denominators[] = { 2, 4, 8, 16 };
+constexpr int chanceValues[] = { 25, 50, 75, 100 };
+
+juce::String nameOf(const SequenceLayer& layer, int slot)
 {
-    const int rowCount = activeStorageRowCount(canonicalCount);
-    const int semanticCount = juce::jmin(canonicalCount, rowCount);
-    const int firstPlayableRow = SEQ_MAX_ROWS - rowCount;
+    return juce::String::fromUTF8(layer.getPatternName(slot));
+}
 
-    bool legacyHasHits = false;
-    bool playableRangeHasHits = false;
+bool isDefaultName(const juce::String& name)
+{
+    return name.trim().isEmpty() || name == SEQ_DEFAULT_PAT_NAME;
+}
 
-    for (int pat = 0; pat < SEQ_MAX_PATTERNS; ++pat)
-    {
-        for (int step = 0; step < SEQ_MAX_STEPS; ++step)
-        {
-            for (int row = 0; row < semanticCount; ++row)
-            {
-                legacyHasHits |= layer->getProb(row, step, pat) != SEQ_PROB_OFF;
-                playableRangeHasHits |=
-                    layer->getProb(firstPlayableRow + row, step, pat) != SEQ_PROB_OFF;
-            }
-        }
-    }
+juce::String displayName(const SequenceLayer& layer, int slot)
+{
+    const auto name = nameOf(layer, slot);
+    return isDefaultName(name) ? "Pattern " + juce::String(slot + 1) : name;
+}
 
-    if (!legacyHasHits || playableRangeHasHits)
-        return;
+// Longest prefix of text whose UTF-8 form fits a pattern name buffer.
+juce::String fitPatternName(juce::String text)
+{
+    text = text.trim();
+    while (text.getNumBytesAsUTF8() > SEQ_PATTERN_NAME_MAXLEN - 1)
+        text = text.dropLastCharacters(1);
+    return text;
+}
 
-    for (int pat = 0; pat < SEQ_MAX_PATTERNS; ++pat)
-    {
-        for (int step = 0; step < SEQ_MAX_STEPS; ++step)
-        {
-            for (int row = 0; row < semanticCount; ++row)
-            {
-                const int dest = firstPlayableRow + row;
-                const int prob = layer->getProb(row, step, pat);
+bool sameEvent(const GgdSequenceEvent& a, const GgdSequenceEvent& b)
+{
+    return a.tick == b.tick && a.row == b.row && a.velocity == b.velocity
+        && a.probability == b.probability && a.durationTicks == b.durationTicks;
+}
 
-                if (prob != SEQ_PROB_OFF)
-                {
-                    layer->setProb(dest, step, static_cast<int8_t>(prob), pat);
-                    layer->setVel(dest, step, layer->getVel(row, step, pat), pat);
-                    layer->setLength(dest, step, layer->getLength(row, step, pat), pat);
-                    layer->setOffset(dest, step, layer->getOffset(row, step, pat), pat);
-                }
+bool sameParked(const GgdPatternOps::ParkedHit& a, const GgdPatternOps::ParkedHit& b)
+{
+    return a.bar == b.bar && a.offset == b.offset && a.row == b.row && a.velocity == b.velocity
+        && a.probability == b.probability && a.durationTicks == b.durationTicks;
+}
 
-                layer->setLength(row, step, 0, pat);
-                layer->setProb(row, step, SEQ_PROB_OFF, pat);
-                layer->setVel(row, step, 0, pat);
-                layer->setOffset(row, step, 0, pat);
-            }
-        }
-    }
+bool sameParkedList(const std::vector<GgdPatternOps::ParkedHit>& a, const std::vector<GgdPatternOps::ParkedHit>& b)
+{
+    return a.size() == b.size() && std::equal(a.begin(), a.end(), b.begin(), sameParked);
+}
+
+juce::String plural(int count, const juce::String& singular, const juce::String& pluralForm)
+{
+    return juce::String(count) + " " + (count == 1 ? singular : pluralForm);
 }
 }
 
-class GgdDrumGrid : public juce::Component
+//==============================================================================
+// Eight pattern slots as one segmented control. The current slot is filled,
+// slots with content carry a dot and the slot the engine is playing gets a
+// playhead-coloured bar.
+class GgdDrumEditor::SlotStrip final : public juce::Component
 {
 public:
-    GgdDrumGrid(SeqAudioProcessor& p,
-                const juce::Array<GgdCanonicalRow>& canonical,
-                std::function<void()> undoFn)
-        : processor(p), canonicalRows(canonical), undoCallback(std::move(undoFn))
+    std::function<void(int)> onSelect;
+    std::function<void(int)> onMenu;
+
+    SlotStrip()
     {
-        setOpaque(true);
-        setWantsKeyboardFocus(true);
+        for (int i = 0; i < SEQ_MAX_PATTERNS; ++i)
+            addAndMakeVisible(slots.add(new Slot(*this, i)));
     }
 
-    void setMap(const GgdKitMap* newMap)
+    void setState(int newCurrent, int newPlaying, const std::array<bool, SEQ_MAX_PATTERNS>& content)
     {
-        map = newMap;
-        rebuildLayout();
-        repaint();
+        const bool changed = current != newCurrent || playing != newPlaying || filled != content;
+        current = newCurrent;
+        playing = newPlaying;
+        filled = content;
+        if (changed)
+            repaintAll();
     }
 
-    void setMeter(int numerator, int denominator)
+    void setSlotTooltip(int slot, const juce::String& text)
     {
-        meterNumerator = juce::jmax(1, numerator);
-        meterDenominator = juce::jmax(1, denominator);
-        rebuildLayout();
-        repaint();
-    }
-
-    void refreshSize()
-    {
-        rebuildLayout();
-        repaint();
-    }
-
-    void setPlayPosition(int newPosition)
-    {
-        if (playPosition == newPosition)
-            return;
-
-        playPosition = newPosition;
-        repaint();
-    }
-
-    bool keyPressed(const juce::KeyPress& key) override
-    {
-        if (isUndoKey(key) && undoCallback)
-        {
-            undoCallback();
-            return true;
-        }
-        return false;
+        if (auto* s = slots[slot])
+            s->setTooltip(text);
     }
 
     void paint(juce::Graphics& g) override
     {
-        g.fillAll(c(bg));
+        const auto bounds = getLocalBounds().toFloat().reduced(0.5f);
+        g.setColour(tc(GgdThemeRole::panelRaised));
+        g.fillRoundedRectangle(bounds, 6.0f);
+    }
 
-        auto* layer = processor.mData.getUISeqData()->getLayer(0);
-        const int numSteps = layer->getNumSteps();
-        const int pattern = layer->getCurrentPattern();
-        const int storageWidth = storageStepWidth();
-        const int snap = snapSteps();
-        const int stepsPerBar = stepsPerBarForMeter(meterNumerator, meterDenominator);
-        const int stepsPerBeat = juce::jmax(1, 16 / meterDenominator);
-        const int viewX = currentViewX();
-        const int stickyX = viewX;
+    void paintOverChildren(juce::Graphics& g) override
+    {
+        g.setColour(tc(GgdThemeRole::border));
+        g.drawRoundedRectangle(getLocalBounds().toFloat().reduced(0.5f), 6.0f, 1.0f);
+    }
 
-        // Timeline ruler.
-        g.setColour(c(panel));
-        g.fillRect(nameWidth, 0, getWidth() - nameWidth, rulerHeight);
-        g.setColour(c(border).brighter(0.12f));
-        g.drawHorizontalLine(rulerHeight - 1, static_cast<float>(nameWidth),
-                             static_cast<float>(getWidth()));
-
-        for (int step = 0; step <= numSteps; ++step)
+    void resized() override
+    {
+        auto area = getLocalBounds();
+        const float width = static_cast<float>(area.getWidth()) / SEQ_MAX_PATTERNS;
+        for (int i = 0; i < slots.size(); ++i)
         {
-            const int x = xForStorageStep(step);
+            const int x0 = juce::roundToInt(width * i);
+            const int x1 = juce::roundToInt(width * (i + 1));
+            slots[i]->setBounds(x0, 0, x1 - x0, area.getHeight());
+        }
+    }
 
-            if (step < numSteps && step % stepsPerBar == 0)
+private:
+    class Slot final : public juce::Button
+    {
+    public:
+        Slot(SlotStrip& strip, int slotIndex)
+            : juce::Button(juce::String(slotIndex + 1)), owner(strip), index(slotIndex)
+        {
+            setMouseClickGrabsKeyboardFocus(false);
+            setWantsKeyboardFocus(false);
+            setTriggeredOnMouseDown(true);
+        }
+
+        void mouseDown(const juce::MouseEvent& e) override
+        {
+            if (e.mods.isPopupMenu())
             {
-                const int bar = step / stepsPerBar + 1;
-                g.setColour(c(text));
-                g.setFont(juce::Font(12.0f, juce::Font::bold));
-                g.drawText("BAR " + juce::String(bar), x + 5, 2,
-                           juce::jmax(storageWidth * stepsPerBeat - 8, 42), 18,
-                           juce::Justification::centredLeft, false);
+                if (owner.onMenu)
+                    owner.onMenu(index);
+                return;
+            }
+            juce::Button::mouseDown(e);
+        }
+
+        void clicked() override
+        {
+            if (owner.onSelect)
+                owner.onSelect(index);
+        }
+
+        void paintButton(juce::Graphics& g, bool highlighted, bool down) override
+        {
+            const bool first = index == 0;
+            const bool last = index == SEQ_MAX_PATTERNS - 1;
+            const bool isCurrent = owner.current == index;
+            const bool hasContent = owner.filled[static_cast<size_t>(index)];
+            const bool isPlaying = owner.playing == index;
+            auto bounds = getLocalBounds().toFloat().reduced(first ? 0.5f : 0.0f, 0.5f);
+            if (last)
+                bounds.removeFromRight(0.5f);
+
+            juce::Path shape;
+            shape.addRoundedRectangle(bounds.getX(), bounds.getY(), bounds.getWidth(), bounds.getHeight(), 6.0f, 6.0f,
+                                      first, last, first, last);
+
+            if (isCurrent)
+            {
+                g.setColour(tc(GgdThemeRole::accent).withAlpha(down ? 0.8f : 0.92f));
+                g.fillPath(shape);
+            }
+            else if (highlighted || down)
+            {
+                g.setColour(tc(GgdThemeRole::panelSoft).withAlpha(down ? 1.0f : 0.85f));
+                g.fillPath(shape);
             }
 
-            if (step < numSteps && step % stepsPerBeat == 0)
+            if (!first && !isCurrent && owner.current != index - 1)
             {
-                const int beat = (step % stepsPerBar) / stepsPerBeat + 1;
-                g.setColour(c(muted));
-                g.setFont(10.5f);
-                g.drawText(juce::String(beat), x, 21,
-                           juce::jmax(storageWidth * stepsPerBeat, 24), 18,
-                           juce::Justification::centredLeft, false);
+                g.setColour(tc(GgdThemeRole::borderSoft));
+                g.fillRect(bounds.getX(), bounds.getY() + 6.0f, 1.0f, bounds.getHeight() - 12.0f);
+            }
+
+            const auto textColour = isCurrent ? tc(GgdThemeRole::accentText)
+                                  : hasContent ? tc(GgdThemeRole::text)
+                                               : tc(GgdThemeRole::faint);
+            g.setColour(textColour);
+            g.setFont(isCurrent ? GgdFonts::bold(12.5f) : GgdFonts::semibold(12.5f));
+            g.drawText(getButtonText(), bounds.withTrimmedBottom(5.0f), juce::Justification::centred, false);
+
+            if (isPlaying)
+            {
+                g.setColour(tc(GgdThemeRole::playhead));
+                g.fillRoundedRectangle(juce::Rectangle<float>(bounds.getWidth() * 0.5f, 2.5f)
+                                           .withCentre({ bounds.getCentreX(), bounds.getBottom() - 6.0f }),
+                                       1.25f);
+            }
+            else if (hasContent)
+            {
+                g.setColour(isCurrent ? tc(GgdThemeRole::accentText).withAlpha(0.7f)
+                                      : tc(GgdThemeRole::accent).withAlpha(0.85f));
+                g.fillEllipse(juce::Rectangle<float>(4.0f, 4.0f).withCentre({ bounds.getCentreX(),
+                                                                              bounds.getBottom() - 6.5f }));
             }
         }
 
-        if (playPosition >= 0 && playPosition < numSteps)
+    private:
+        SlotStrip& owner;
+        int index;
+    };
+
+    juce::OwnedArray<Slot> slots;
+    int current = 0;
+    int playing = -1;
+    std::array<bool, SEQ_MAX_PATTERNS> filled {};
+
+    void repaintAll()
+    {
+        repaint();
+        for (auto* slot : slots)
+            slot->repaint();
+    }
+};
+
+//==============================================================================
+// Bar count: [-] value [+]. Click the value to type, scroll to change.
+class GgdDrumEditor::BarsStepper final : public juce::Component,
+                                         public juce::SettableTooltipClient,
+                                         private juce::Timer
+{
+public:
+    std::function<void(int)> onChange;
+    std::function<void()> onEditingFinished;
+
+    BarsStepper()
+    {
+        setWantsKeyboardFocus(false);
+        setMouseClickGrabsKeyboardFocus(false);
+        setRepaintsOnMouseActivity(true);
+
+        editor.setJustification(juce::Justification::centred);
+        editor.setInputRestrictions(2, "0123456789");
+        editor.setSelectAllWhenFocused(true);
+        editor.setFont(GgdFonts::semibold(13.0f));
+        editor.onReturnKey = [this] { commitText(); };
+        editor.onEscapeKey = [this] { endEditing(); };
+        editor.onFocusLost = [this] { commitText(); };
+        addChildComponent(editor);
+    }
+
+    void setValue(int newValue, int newMaximum)
+    {
+        newMaximum = juce::jmax(1, newMaximum);
+        newValue = juce::jlimit(1, newMaximum, newValue);
+        if (newValue != value || newMaximum != maximum)
         {
-            const int x = xForStorageStep(playPosition);
-            g.setColour(c(accent).withAlpha(0.10f));
-            g.fillRect(x, rulerHeight, storageWidth, getHeight() - rulerHeight);
+            value = newValue;
+            maximum = newMaximum;
+            repaint();
         }
+    }
 
-        // Timeline rows, guides and hits.
-        for (int i = 0; i < static_cast<int>(layout.size()); ++i)
+    bool isEditing() const { return editor.isVisible(); }
+
+    void paint(juce::Graphics& g) override
+    {
+        auto bounds = getLocalBounds().toFloat().reduced(0.5f);
+        g.setColour(tc(GgdThemeRole::panelRaised));
+        g.fillRoundedRectangle(bounds, 6.0f);
+
+        const int hover = isMouseOver(true) ? zoneAt(getMouseXYRelative().x) : 0;
+        auto minusArea = bounds.withWidth(zoneWidth);
+        auto plusArea = bounds.withLeft(bounds.getRight() - zoneWidth);
+        auto paintZone = [&](juce::Rectangle<float> area, int zone, bool enabled, bool plus)
         {
-            const auto& item = layout[static_cast<size_t>(i)];
-
-            if (item.header)
+            if (hover == zone && enabled)
             {
-                g.setColour(c(panel2));
-                g.fillRect(nameWidth, item.y, getWidth() - nameWidth, item.height);
-                g.setColour(c(accent2).withAlpha(0.75f));
-                g.fillRect(nameWidth, item.y, getWidth() - nameWidth, 2);
-                g.setColour(c(accent2).withAlpha(0.58f));
-                g.fillRect(nameWidth, item.y + item.height - 2,
-                           getWidth() - nameWidth, 2);
-                continue;
+                juce::Path path;
+                path.addRoundedRectangle(area.getX(), area.getY(), area.getWidth(), area.getHeight(), 6.0f, 6.0f,
+                                         !plus, plus, !plus, plus);
+                g.setColour(tc(GgdThemeRole::panelSoft));
+                g.fillPath(path);
             }
+            const auto colour = enabled ? (hover == zone ? tc(GgdThemeRole::text) : tc(GgdThemeRole::muted))
+                                        : tc(GgdThemeRole::faint).withAlpha(0.5f);
+            g.setColour(colour);
+            const auto c = area.getCentre();
+            g.fillRoundedRectangle(juce::Rectangle<float>(9.0f, 1.6f).withCentre(c), 0.8f);
+            if (plus)
+                g.fillRoundedRectangle(juce::Rectangle<float>(1.6f, 9.0f).withCentre(c), 0.8f);
+        };
+        paintZone(minusArea, -1, value > 1, false);
+        paintZone(plusArea, 1, value < maximum, true);
 
-            const bool alternate = (i % 2) != 0;
-            g.setColour(alternate ? c(panel2).withAlpha(0.46f) : c(bg));
-            g.fillRect(nameWidth, item.y, getWidth() - nameWidth, item.height);
+        g.setColour(tc(GgdThemeRole::borderSoft));
+        g.fillRect(minusArea.getRight(), bounds.getY() + 6.0f, 1.0f, bounds.getHeight() - 12.0f);
+        g.fillRect(plusArea.getX() - 1.0f, bounds.getY() + 6.0f, 1.0f, bounds.getHeight() - 12.0f);
 
-            g.setColour(c(border).withAlpha(0.70f));
-            g.drawHorizontalLine(item.y + item.height - 1,
-                                 static_cast<float>(nameWidth),
-                                 static_cast<float>(getWidth()));
+        g.setColour(hover == 0 && isMouseOver(true) ? tc(GgdThemeRole::accent).withAlpha(0.7f)
+                                                    : tc(GgdThemeRole::border));
+        g.drawRoundedRectangle(bounds, 6.0f, 1.0f);
 
-            const int storageRow =
-                storageRowForCanonical(item.canonicalRow, canonicalRows.size());
-
-            for (int step = 0; step <= numSteps; ++step)
-            {
-                const int x = xForStorageStep(step);
-
-                if (step < numSteps && step % snap == 0)
-                {
-                    if (step % stepsPerBar == 0)
-                        g.setColour(c(accent2).withAlpha(0.72f));
-                    else if (step % stepsPerBeat == 0)
-                        g.setColour(c(border).brighter(0.36f));
-                    else
-                        g.setColour(c(border).withAlpha(0.78f));
-
-                    g.drawVerticalLine(x, static_cast<float>(item.y),
-                                       static_cast<float>(item.y + item.height));
-                }
-
-                if (step >= numSteps)
-                    continue;
-
-                const int prob = layer->getProb(storageRow, step, pattern);
-                if (prob < 0)
-                    continue;
-
-                int velocity = layer->getVel(storageRow, step, pattern);
-                velocity = juce::jlimit(1, 127, velocity <= 0 ? 1 : velocity);
-                const float v = static_cast<float>(velocity) / 127.0f;
-
-                const float hitW = std::max(
-                    4.0f, std::min(20.0f, static_cast<float>(storageWidth) - 3.0f));
-                const float hitH = 7.0f + 13.0f * v;
-                const float cx = static_cast<float>(x) + storageWidth * 0.5f;
-                const float cy = static_cast<float>(item.y) + item.height * 0.5f;
-                juce::Rectangle<float> hit(cx - hitW * 0.5f, cy - hitH * 0.5f,
-                                           hitW, hitH);
-
-                g.setColour(c(accent).withAlpha(0.48f + 0.48f * v));
-                g.fillRoundedRectangle(hit, juce::jmin(4.0f, hitW * 0.35f));
-
-                const int offset = layer->getOffset(storageRow, step, pattern);
-                if (offset != 0)
-                {
-                    const float markerX =
-                        cx + (static_cast<float>(offset) / 50.0f)
-                                 * (storageWidth * 0.42f);
-                    g.setColour(c(text).withAlpha(0.92f));
-                    g.drawVerticalLine(static_cast<int>(std::round(markerX)),
-                                       cy - hitH * 0.34f, cy + hitH * 0.34f);
-                }
-
-                const int retrigger = layer->getLength(storageRow, step, pattern);
-                if (retrigger < 0)
-                {
-                    g.setColour(c(text).withAlpha(0.88f));
-                    g.setFont(9.5f);
-                    g.drawText("x" + juce::String((-retrigger) + 1),
-                               x, item.y, storageWidth, item.height,
-                               juce::Justification::centredBottom, false);
-                }
-            }
-        }
-
-        // Sticky articulation lane. Draw it last so the timeline disappears cleanly
-        // underneath it while horizontally scrolling.
-        g.setColour(c(panel));
-        g.fillRect(stickyX, 0, nameWidth, rulerHeight);
-        g.setColour(c(muted));
-        g.setFont(12.0f);
-        g.drawText("ARTICULATION", stickyX + 18, 0, nameWidth - 24, rulerHeight,
-                   juce::Justification::centredLeft, false);
-
-        for (int i = 0; i < static_cast<int>(layout.size()); ++i)
+        if (!editor.isVisible())
         {
-            const auto& item = layout[static_cast<size_t>(i)];
-
-            if (item.header)
-            {
-                g.setColour(c(panel2));
-                g.fillRect(stickyX, item.y, nameWidth, item.height);
-                g.setColour(c(border).brighter(0.12f));
-                g.drawHorizontalLine(item.y + item.height - 1,
-                                     static_cast<float>(stickyX),
-                                     static_cast<float>(stickyX + nameWidth));
-                g.setColour(c(muted));
-                g.setFont(juce::Font(10.5f, juce::Font::bold));
-                g.drawText(item.groupLabel.toUpperCase(), stickyX + 18, item.y,
-                           nameWidth - 24, item.height,
-                           juce::Justification::centredLeft, false);
-                continue;
-            }
-
-            const bool alternate = (i % 2) != 0;
-            g.setColour(alternate ? c(panel2).withAlpha(0.96f) : c(bg));
-            g.fillRect(stickyX, item.y, nameWidth, item.height);
-            g.setColour(c(border).withAlpha(0.70f));
-            g.drawHorizontalLine(item.y + item.height - 1,
-                                 static_cast<float>(stickyX),
-                                 static_cast<float>(stickyX + nameWidth));
-
-            g.setColour(c(text));
-            g.setFont(12.5f);
-            g.drawText(item.label, stickyX + 18, item.y + 1, nameWidth - 86,
-                       item.height - 2, juce::Justification::centredLeft, true);
-
-            g.setColour(c(muted));
-            g.setFont(10.5f);
-            g.drawText(item.noteName, stickyX + nameWidth - 70, item.y + 1, 52,
-                       item.height - 2, juce::Justification::centredRight, false);
+            auto centre = bounds.reduced(zoneWidth, 0.0f);
+            g.setColour(tc(GgdThemeRole::text));
+            g.setFont(GgdFonts::semibold(12.5f));
+            g.drawText(juce::String(value) + (value == 1 ? " bar" : " bars"), centre, juce::Justification::centred,
+                       false);
         }
+    }
 
-        g.setColour(c(border).brighter(0.25f));
-        g.drawVerticalLine(stickyX + nameWidth, 0.0f,
-                           static_cast<float>(getHeight()));
+    void resized() override
+    {
+        editor.setBounds(getLocalBounds().reduced(static_cast<int>(zoneWidth) + 2, 3));
     }
 
     void mouseDown(const juce::MouseEvent& e) override
     {
-        grabKeyboardFocus();
-
-        dragMode = DragMode::none;
-        lastPaintRow = -1;
-        lastPaintStep = -1;
-
-        int canonicalRow = -1;
-        int step = -1;
-        if (!snappedCellAt(e.position, canonicalRow, step))
-            return;
-
-        auto* layer = processor.mData.getUISeqData()->getLayer(0);
-        const int pattern = layer->getCurrentPattern();
-        const int storageRow =
-            storageRowForCanonical(canonicalRow, canonicalRows.size());
-        const bool isOn = layer->getProb(storageRow, step, pattern) >= 0;
-
-        dragRow = canonicalRow;
-        dragStep = step;
-        dragStart = e.position;
-
-        const auto mods = e.mods;
-        const bool command = mods.isCtrlDown() || mods.isCommandDown();
-
-        // Ctrl+Shift click cycles retriggers: normal, double, triple, quad, normal.
-        if (command && mods.isShiftDown() && !mods.isAltDown())
+        const int zone = zoneAt(e.x);
+        if (zone == 0)
         {
-            if (!isOn)
-            {
-                setCell(canonicalRow, step, true);
-                layer->setLength(storageRow, step, -1, pattern);
-            }
-            else
-            {
-                const int len = layer->getLength(storageRow, step, pattern);
-                const int next = len >= 0 ? -1 : len > -3 ? len - 1 : 0;
-                layer->setLength(storageRow, step, static_cast<int8_t>(next), pattern);
-            }
-
-            dragMode = DragMode::special;
-            repaint();
+            beginEditing();
             return;
         }
-
-        // Ctrl click is a quick ghost-note gesture.
-        if (command && !mods.isAltDown())
-        {
-            if (!isOn)
-            {
-                setCell(canonicalRow, step, true);
-                layer->setVel(storageRow, step, 42, pattern);
-            }
-            else
-            {
-                const int oldVelocity =
-                    juce::jlimit(1, 127, static_cast<int>(
-                        layer->getVel(storageRow, step, pattern)));
-                layer->setVel(storageRow, step,
-                              static_cast<int8_t>(oldVelocity <= 55 ? 100 : 42),
-                              pattern);
-            }
-
-            dragMode = DragMode::special;
-            repaint();
-            return;
-        }
-
-        if (mods.isShiftDown() && isOn)
-        {
-            dragMode = DragMode::velocity;
-            dragStartValue = juce::jlimit(
-                1, 127, static_cast<int>(layer->getVel(storageRow, step, pattern)));
-            return;
-        }
-
-        if (mods.isAltDown() && isOn)
-        {
-            dragMode = DragMode::timing;
-            dragStartValue = layer->getOffset(storageRow, step, pattern);
-            return;
-        }
-
-        if (mods.isRightButtonDown())
-        {
-            dragMode = DragMode::erase;
-            setCell(canonicalRow, step, false);
-        }
-        else
-        {
-            dragMode = isOn ? DragMode::erase : DragMode::paint;
-            setCell(canonicalRow, step, !isOn);
-        }
-
-        lastPaintRow = canonicalRow;
-        lastPaintStep = step;
-        repaint();
-    }
-
-    void mouseDrag(const juce::MouseEvent& e) override
-    {
-        auto* layer = processor.mData.getUISeqData()->getLayer(0);
-        const int pattern = layer->getCurrentPattern();
-
-        if (dragMode == DragMode::velocity && dragRow >= 0)
-        {
-            const int storageRow =
-                storageRowForCanonical(dragRow, canonicalRows.size());
-            const int delta =
-                static_cast<int>((dragStart.y - e.position.y) * 1.5f);
-            const int velocity = juce::jlimit(1, 127, dragStartValue + delta);
-            layer->setVel(storageRow, dragStep,
-                          static_cast<int8_t>(velocity), pattern);
-            repaint();
-            return;
-        }
-
-        if (dragMode == DragMode::timing && dragRow >= 0)
-        {
-            const int storageRow =
-                storageRowForCanonical(dragRow, canonicalRows.size());
-            const float pixelsForHalfStep =
-                juce::jmax(8.0f, static_cast<float>(storageStepWidth()) * 0.5f);
-            const float dx = e.position.x - dragStart.x;
-            const int delta = static_cast<int>(
-                std::round((dx / pixelsForHalfStep) * 50.0f));
-            const int offset = juce::jlimit(-50, 50, dragStartValue + delta);
-            layer->setOffset(storageRow, dragStep,
-                             static_cast<int8_t>(offset), pattern);
-            repaint();
-            return;
-        }
-
-        if (dragMode != DragMode::paint && dragMode != DragMode::erase)
-            return;
-
-        int canonicalRow = -1;
-        int step = -1;
-        if (!snappedCellAt(e.position, canonicalRow, step))
-            return;
-
-        if (canonicalRow == lastPaintRow && step == lastPaintStep)
-            return;
-
-        setCell(canonicalRow, step, dragMode == DragMode::paint);
-        lastPaintRow = canonicalRow;
-        lastPaintStep = step;
-        repaint();
+        repeatDirection = zone;
+        step(zone);
+        startTimer(420);
     }
 
     void mouseUp(const juce::MouseEvent&) override
     {
-        if (dragMode != DragMode::none)
-            publishChange();
-
-        dragMode = DragMode::none;
+        stopTimer();
+        repeatDirection = 0;
     }
 
-    void mouseWheelMove(const juce::MouseEvent& e,
-                        const juce::MouseWheelDetails& wheel) override
+    void mouseWheelMove(const juce::MouseEvent&, const juce::MouseWheelDetails& wheel) override
     {
-        auto* viewport = findParentComponentOfClass<juce::Viewport>();
-        if (viewport == nullptr)
-            return;
-
-        const float primaryDelta =
-            std::abs(wheel.deltaY) >= std::abs(wheel.deltaX)
-                ? wheel.deltaY
-                : wheel.deltaX;
-
-        if (e.mods.isCtrlDown() || e.mods.isCommandDown())
+        wheelAccumulator += wheel.deltaY;
+        while (std::abs(wheelAccumulator) >= 0.12f)
         {
-            if (std::abs(primaryDelta) < 0.0001f)
-                return;
-
-            const int oldZoom = zoomLevel;
-            const int newZoom = juce::jlimit(
-                0, maxZoomLevel, oldZoom + (primaryDelta > 0.0f ? 1 : -1));
-
-            if (newZoom == oldZoom)
-                return;
-
-            const int oldStorageWidth = storageStepWidth();
-            const int oldViewX = viewport->getViewPositionX();
-            const int oldViewY = viewport->getViewPositionY();
-            const float anchorX = juce::jmax(
-                e.position.x, static_cast<float>(oldViewX + nameWidth));
-            const float storageCoordinate =
-                (anchorX - static_cast<float>(nameWidth))
-                / static_cast<float>(oldStorageWidth);
-
-            zoomLevel = newZoom;
-            rebuildLayout();
-
-            const float newAnchor =
-                static_cast<float>(nameWidth)
-                + storageCoordinate * static_cast<float>(storageStepWidth());
-            const int newViewX =
-                oldViewX + static_cast<int>(std::round(newAnchor - anchorX));
-
-            viewport->setViewPosition(juce::jmax(0, newViewX), oldViewY);
-            repaint();
-            return;
+            step(wheelAccumulator > 0.0f ? 1 : -1);
+            wheelAccumulator -= wheelAccumulator > 0.0f ? 0.12f : -0.12f;
         }
-
-        if (e.mods.isAltDown())
-        {
-            int canonicalRow = -1;
-            int step = -1;
-            if (exactCellAt(e.position, canonicalRow, step))
-            {
-                auto* layer = processor.mData.getUISeqData()->getLayer(0);
-                const int storageRow =
-                    storageRowForCanonical(canonicalRow, canonicalRows.size());
-                const int pattern = layer->getCurrentPattern();
-
-                if (layer->getProb(storageRow, step, pattern) >= 0)
-                {
-                    if (e.mods.isShiftDown())
-                    {
-                        if (cycleHatArticulation(canonicalRow, step,
-                                                 primaryDelta >= 0.0f ? 1 : -1))
-                            return;
-                    }
-                    else
-                    {
-                        const int oldVelocity = juce::jlimit(
-                            1, 127, static_cast<int>(
-                                layer->getVel(storageRow, step, pattern)));
-                        const int amount =
-                            juce::jmax(1, static_cast<int>(
-                                std::round(std::abs(primaryDelta) * 24.0f)));
-                        const int velocity = juce::jlimit(
-                            1, 127,
-                            oldVelocity + (primaryDelta >= 0.0f ? amount : -amount));
-
-                        if (velocity != oldVelocity)
-                        {
-                            layer->setVel(storageRow, step,
-                                          static_cast<int8_t>(velocity), pattern);
-                            publishChange();
-                            repaint();
-                        }
-                        return;
-                    }
-                }
-            }
-        }
-
-        const float scrollScale = 180.0f;
-        int x = viewport->getViewPositionX();
-        int y = viewport->getViewPositionY();
-
-        if (std::abs(wheel.deltaX) > 0.0001f)
-        {
-            x -= static_cast<int>(std::round(wheel.deltaX * scrollScale));
-        }
-        else if (e.mods.isShiftDown())
-        {
-            x -= static_cast<int>(std::round(wheel.deltaY * scrollScale));
-        }
-        else
-        {
-            y -= static_cast<int>(std::round(wheel.deltaY * scrollScale));
-        }
-
-        viewport->setViewPosition(juce::jmax(0, x), juce::jmax(0, y));
     }
 
 private:
-    struct LayoutItem
+    static constexpr float zoneWidth = 26.0f;
+    juce::TextEditor editor;
+    int value = 1;
+    int maximum = GGD_MAX_PATTERN_BARS;
+    int repeatDirection = 0;
+    float wheelAccumulator = 0.0f;
+
+    int zoneAt(int x) const
     {
-        bool header = false;
-        int y = 0;
-        int height = 0;
-        int canonicalRow = -1;
-        juce::String groupLabel;
-        juce::String label;
-        juce::String noteName;
-    };
-
-    enum class DragMode { none, paint, erase, velocity, timing, special };
-
-    SeqAudioProcessor& processor;
-    const juce::Array<GgdCanonicalRow>& canonicalRows;
-    std::function<void()> undoCallback;
-    const GgdKitMap* map = nullptr;
-    std::vector<LayoutItem> layout;
-
-    int meterNumerator = 4;
-    int meterDenominator = 4;
-    int playPosition = -1;
-    int zoomLevel = 0;
-    DragMode dragMode = DragMode::none;
-    int dragRow = -1;
-    int dragStep = -1;
-    int dragStartValue = 0;
-    juce::Point<float> dragStart;
-    int lastPaintRow = -1;
-    int lastPaintStep = -1;
-
-    static constexpr int nameWidth = 238;
-    static constexpr int rulerHeight = 42;
-    static constexpr int groupHeight = 28;
-    static constexpr int rowHeight = 34;
-    static constexpr int divisionWidth = 56;
-    static constexpr int maxZoomLevel = 2;
-
-    int snapSteps() const
-    {
-        static constexpr int values[] = { 4, 2, 1 };
-        return values[juce::jlimit(0, maxZoomLevel, zoomLevel)];
-    }
-
-    int storageStepWidth() const
-    {
-        return juce::jmax(6, divisionWidth / snapSteps());
-    }
-
-    int xForStorageStep(int step) const
-    {
-        return nameWidth + step * storageStepWidth();
-    }
-
-    int currentViewX() const
-    {
-        if (auto* viewport = findParentComponentOfClass<juce::Viewport>())
-            return viewport->getViewPositionX();
+        if (x < zoneWidth)
+            return -1;
+        if (x > getWidth() - zoneWidth)
+            return 1;
         return 0;
     }
 
-    void rebuildLayout()
+    void step(int direction)
     {
-        layout.clear();
-        int y = rulerHeight;
+        const int next = juce::jlimit(1, maximum, value + direction);
+        if (next == value)
+            return;
+        value = next;
+        repaint();
+        if (onChange)
+            onChange(value);
+    }
 
-        if (map != nullptr)
+    void timerCallback() override
+    {
+        if (repeatDirection == 0 || !isMouseButtonDown())
         {
-            for (const auto& group : map->groups)
-            {
-                LayoutItem headerItem;
-                headerItem.header = true;
-                headerItem.y = y;
-                headerItem.height = groupHeight;
-                headerItem.groupLabel = group.label;
-                layout.push_back(headerItem);
-                y += groupHeight;
-
-                for (const auto& articulation : group.articulations)
-                {
-                    const int canonical = GgdKitMapLibrary::findCanonicalRow(
-                        canonicalRows, articulation.semanticId);
-                    if (canonical < 0)
-                        continue;
-
-                    LayoutItem row;
-                    row.y = y;
-                    row.height = rowHeight;
-                    row.canonicalRow = canonical;
-                    row.label = articulation.label;
-
-                    if (const auto* binding = articulation.primaryNoteBinding())
-                        row.noteName = binding->noteName;
-                    else
-                        row.noteName = "-";
-
-                    layout.push_back(row);
-                    y += rowHeight;
-                }
-            }
-        }
-
-        auto* layer = processor.mData.getUISeqData()->getLayer(0);
-        // The extra nameWidth at the end lets the final beat scroll out from
-        // underneath the sticky articulation lane.
-        const int width = std::max(
-            840,
-            nameWidth + layer->getNumSteps() * storageStepWidth()
-                + nameWidth + 24);
-        setSize(width, std::max(320, y + 18));
-    }
-
-    bool rowAtY(float y, int& canonicalRow) const
-    {
-        for (const auto& item : layout)
-        {
-            if (!item.header && y >= item.y && y < item.y + item.height)
-            {
-                canonicalRow = item.canonicalRow;
-                return true;
-            }
-        }
-        return false;
-    }
-
-    bool exactCellAt(juce::Point<float> p, int& canonicalRow, int& step) const
-    {
-        if (p.y < rulerHeight || p.x < currentViewX() + nameWidth)
-            return false;
-
-        auto* layer = processor.mData.getUISeqData()->getLayer(0);
-        step = static_cast<int>((p.x - nameWidth) / storageStepWidth());
-        if (step < 0 || step >= layer->getNumSteps())
-            return false;
-
-        return rowAtY(p.y, canonicalRow);
-    }
-
-    bool snappedCellAt(juce::Point<float> p, int& canonicalRow, int& step) const
-    {
-        if (!exactCellAt(p, canonicalRow, step))
-            return false;
-
-        const int snap = snapSteps();
-        step = (step / snap) * snap;
-        return true;
-    }
-
-    void setCell(int canonicalRow, int step, bool on)
-    {
-        auto* layer = processor.mData.getUISeqData()->getLayer(0);
-        const int pattern = layer->getCurrentPattern();
-        const int storageRow =
-            storageRowForCanonical(canonicalRow, canonicalRows.size());
-
-        if (!on)
-        {
-            layer->setLength(storageRow, step, 0, pattern);
-            layer->setProb(storageRow, step, SEQ_PROB_OFF, pattern);
-            layer->setVel(storageRow, step, 0, pattern);
-            layer->setOffset(storageRow, step, 0, pattern);
+            stopTimer();
             return;
         }
-
-        layer->setProb(storageRow, step, SEQ_PROB_ON, pattern);
-        if (layer->getVel(storageRow, step, pattern) <= 0)
-            layer->setVel(storageRow, step, 100, pattern);
+        step(repeatDirection);
+        startTimer(70);
     }
 
-    bool cycleHatArticulation(int canonicalRow, int step, int direction)
+    void beginEditing()
     {
-        if (map == nullptr || canonicalRow < 0 || canonicalRow >= canonicalRows.size())
-            return false;
+        editor.setColour(juce::TextEditor::backgroundColourId, tc(GgdThemeRole::panel));
+        editor.setColour(juce::TextEditor::textColourId, tc(GgdThemeRole::text));
+        editor.setText(juce::String(value), false);
+        editor.setVisible(true);
+        editor.grabKeyboardFocus();
+        editor.selectAll();
+        repaint();
+    }
 
-        static const char* hats[] = {
-            "hihat.tip_tight",
-            "hihat.edge_tight",
-            "hihat.tip_closed",
-            "hihat.edge_closed",
-            "hihat.open_1",
-            "hihat.open_2",
-            "hihat.open_3"
-        };
-
-        const auto semanticId = canonicalRows.getReference(canonicalRow).semanticId;
-        int sourceIndex = -1;
-        for (int i = 0; i < static_cast<int>(std::size(hats)); ++i)
+    void commitText()
+    {
+        if (!editor.isVisible())
+            return;
+        const int typed = editor.getText().getIntValue();
+        endEditing();
+        if (typed >= 1)
         {
-            if (semanticId == hats[i])
+            const int next = juce::jlimit(1, maximum, typed);
+            if (next != value)
             {
-                sourceIndex = i;
-                break;
+                value = next;
+                repaint();
+                if (onChange)
+                    onChange(value);
             }
         }
-
-        if (sourceIndex < 0)
-            return false;
-
-        for (int attempt = 1; attempt <= static_cast<int>(std::size(hats)); ++attempt)
-        {
-            const int count = static_cast<int>(std::size(hats));
-            const int targetIndex =
-                (sourceIndex + direction * attempt + count * 2) % count;
-            const juce::String targetId(hats[targetIndex]);
-
-            if (map->findArticulation(targetId) == nullptr)
-                continue;
-
-            const int targetCanonical =
-                GgdKitMapLibrary::findCanonicalRow(canonicalRows, targetId);
-            if (targetCanonical < 0 || targetCanonical == canonicalRow)
-                continue;
-
-            auto* layer = processor.mData.getUISeqData()->getLayer(0);
-            const int pattern = layer->getCurrentPattern();
-            const int src =
-                storageRowForCanonical(canonicalRow, canonicalRows.size());
-            const int dst =
-                storageRowForCanonical(targetCanonical, canonicalRows.size());
-
-            const int prob = layer->getProb(src, step, pattern);
-            if (prob < 0)
-                return false;
-
-            const int vel = layer->getVel(src, step, pattern);
-            const int len = layer->getLength(src, step, pattern);
-            const int offs = layer->getOffset(src, step, pattern);
-
-            layer->setProb(dst, step, static_cast<int8_t>(prob), pattern);
-            layer->setVel(dst, step, static_cast<int8_t>(vel), pattern);
-            layer->setLength(dst, step, static_cast<int8_t>(len), pattern);
-            layer->setOffset(dst, step, static_cast<int8_t>(offs), pattern);
-
-            layer->setLength(src, step, 0, pattern);
-            layer->setProb(src, step, SEQ_PROB_OFF, pattern);
-            layer->setVel(src, step, 0, pattern);
-            layer->setOffset(src, step, 0, pattern);
-
-            publishChange();
-            repaint();
-            return true;
-        }
-
-        return false;
     }
 
-    void publishChange()
+    void endEditing()
     {
-        processor.mData.swap();
-        processor.mIncomingData.addToFifo(SEQ_NOTIFY_HOST, 0, 0);
+        if (!editor.isVisible())
+            return;
+        editor.setVisible(false);
+        repaint();
+        if (onEditingFinished)
+            onEditingFinished();
     }
 };
 
-GgdDrumEditor::GgdDrumEditor(SeqAudioProcessor& p)
-    : juce::AudioProcessorEditor(&p), processor(p)
+//==============================================================================
+// Play state, pattern position and the host meter.
+class GgdDrumEditor::TransportDisplay final : public juce::Component,
+                                              public juce::SettableTooltipClient
 {
-    configureLookAndFeel();
-    setLookAndFeel(&lookAndFeel);
-    setWantsKeyboardFocus(true);
-
-    maps = GgdKitMapLibrary::loadBuiltInMaps();
-    canonicalRows = GgdKitMapLibrary::buildCanonicalRows(maps);
-
-    grid = std::make_unique<GgdDrumGrid>(
-        processor, canonicalRows, [this] { performUndo(); });
-    gridViewport.setViewedComponent(grid.get(), false);
-    gridViewport.setScrollBarsShown(true, true);
-    gridViewport.setScrollBarThickness(11);
-    addAndMakeVisible(gridViewport);
-
-    productLabel.setText("STOCHAS GGD", juce::dontSendNotification);
-    productLabel.setFont(juce::Font(17.0f, juce::Font::bold));
-    productLabel.setColour(juce::Label::textColourId, c(text));
-    addAndMakeVisible(productLabel);
-
-    transportStatus.setText("Ready", juce::dontSendNotification);
-    transportStatus.setFont(juce::Font(11.5f));
-    transportStatus.setColour(juce::Label::textColourId, c(muted));
-    addAndMakeVisible(transportStatus);
-
-    kitSelector.setTooltip("Destination GGD mapping");
-    for (int i = 0; i < maps.size(); ++i)
-        kitSelector.addItem(maps.getReference(i).library, i + 1);
-    kitSelector.onChange = [this]
+public:
+    struct State
     {
-        if (kitSelector.getSelectedId() > 0)
-            setActiveMap(kitSelector.getSelectedId() - 1);
+        bool playing = false;
+        bool resting = false;
+        bool muted = false;
+        juce::String position;
+        juce::String hostMeter;
+        bool mismatch = false;
+
+        bool operator==(const State& o) const
+        {
+            return playing == o.playing && resting == o.resting && muted == o.muted && position == o.position
+                && hostMeter == o.hostMeter && mismatch == o.mismatch;
+        }
     };
-    addAndMakeVisible(kitSelector);
 
-    patternSelector.setTooltip("Pattern slot");
-    for (int i = 1; i <= SEQ_MAX_PATTERNS; ++i)
-        patternSelector.addItem("Pattern " + juce::String(i), i);
-    patternSelector.onChange = [this]
+    void setState(const State& next)
     {
-        const int selected = patternSelector.getSelectedId();
-        if (selected <= 0)
+        if (next == state)
             return;
+        state = next;
+        repaint();
+    }
 
-        auto* layer = processor.mData.getUISeqData()->getLayer(0);
-        layer->setCurrentPattern(selected - 1);
-        publishModelChange();
-        refreshControlsFromModel();
-        grid->repaint();
-    };
-    addAndMakeVisible(patternSelector);
-
-    meterLabel.setText("METER", juce::dontSendNotification);
-    meterLabel.setFont(juce::Font(10.5f, juce::Font::bold));
-    meterLabel.setColour(juce::Label::textColourId, c(muted));
-    addAndMakeVisible(meterLabel);
-
-    for (int numerator = 1; numerator <= 16; ++numerator)
-        numeratorSelector.addItem(juce::String(numerator), numerator);
-    numeratorSelector.setTooltip("Time signature numerator");
-    numeratorSelector.onChange = [this]
+    void paint(juce::Graphics& g) override
     {
-        if (numeratorSelector.getSelectedId() > 0)
+        auto bounds = getLocalBounds().toFloat().reduced(0.5f);
+        g.setColour(tc(GgdThemeRole::outside).withAlpha(0.7f));
+        g.fillRoundedRectangle(bounds, 6.0f);
+        g.setColour(tc(GgdThemeRole::borderSoft));
+        g.drawRoundedRectangle(bounds, 6.0f, 1.0f);
+
+        auto content = bounds.reduced(10.0f, 0.0f);
+        auto icon = content.removeFromLeft(12.0f).withSizeKeepingCentre(10.0f, 10.0f);
+        if (state.playing)
         {
-            timeSigNumerator = numeratorSelector.getSelectedId();
-            applyPatternGeometry();
+            juce::Path play;
+            play.addTriangle(icon.getX() + 1.0f, icon.getY(), icon.getX() + 1.0f, icon.getBottom(), icon.getRight(),
+                             icon.getCentreY());
+            g.setColour(state.muted ? tc(GgdThemeRole::warning) : tc(GgdThemeRole::success));
+            g.fillPath(play);
         }
-    };
-    addAndMakeVisible(numeratorSelector);
+        else
+        {
+            g.setColour(tc(GgdThemeRole::faint));
+            g.fillRoundedRectangle(icon.reduced(1.0f), 1.5f);
+        }
+        content.removeFromLeft(8.0f);
 
-    meterSlash.setText("/", juce::dontSendNotification);
-    meterSlash.setFont(juce::Font(16.0f, juce::Font::bold));
-    meterSlash.setColour(juce::Label::textColourId, c(muted));
-    meterSlash.setJustificationType(juce::Justification::centred);
-    addAndMakeVisible(meterSlash);
+        if (state.hostMeter.isNotEmpty())
+        {
+            g.setFont(GgdFonts::medium(11.5f));
+            const float width = juce::GlyphArrangement::getStringWidth(g.getCurrentFont(), state.hostMeter)
+                              + (state.mismatch ? 18.0f : 0.0f) + 4.0f;
+            auto meter = content.removeFromRight(width);
+            const auto colour = state.mismatch ? tc(GgdThemeRole::warning) : tc(GgdThemeRole::muted);
+            if (state.mismatch)
+                ggdDrawIcon(g, GgdIcon::warning, meter.removeFromLeft(14.0f).withSizeKeepingCentre(13.0f, 13.0f),
+                            colour, 1.4f);
+            g.setColour(colour);
+            g.drawText(state.hostMeter, meter, juce::Justification::centredRight, false);
+            content.removeFromRight(6.0f);
+        }
 
-    denominatorSelector.addItem("4", 1);
-    denominatorSelector.addItem("8", 2);
-    denominatorSelector.addItem("16", 3);
-    denominatorSelector.setTooltip("Time signature denominator");
-    denominatorSelector.onChange = [this]
+        if (state.playing && !state.resting)
+        {
+            g.setColour(tc(GgdThemeRole::text));
+            g.setFont(GgdFonts::semibold(14.0f));
+            g.drawText(state.position, content, juce::Justification::centredLeft, false);
+            if (state.muted)
+            {
+                const float used = juce::GlyphArrangement::getStringWidth(g.getCurrentFont(), state.position) + 8.0f;
+                g.setColour(tc(GgdThemeRole::warning));
+                g.setFont(GgdFonts::semibold(10.5f));
+                g.drawText("SEQ OFF", content.withTrimmedLeft(used), juce::Justification::centredLeft, false);
+            }
+        }
+        else
+        {
+            g.setColour(tc(GgdThemeRole::muted));
+            g.setFont(GgdFonts::medium(12.5f));
+            g.drawText(state.playing ? "Waiting for bar" : "Stopped", content, juce::Justification::centredLeft,
+                       false);
+        }
+    }
+
+private:
+    State state;
+};
+
+//==============================================================================
+// Starts an external drag of a MIDI file once the pointer moves a little.
+class GgdDrumEditor::MidiDragButton final : public GgdButton
+{
+public:
+    using GgdButton::GgdButton;
+
+    std::function<void(juce::Component*)> onBeginDrag;
+
+    void mouseDown(const juce::MouseEvent& e) override
     {
-        const int id = denominatorSelector.getSelectedId();
-        if (id > 0)
-        {
-            static constexpr int values[] = { 4, 8, 16 };
-            timeSigDenominator = values[id - 1];
-            applyPatternGeometry();
-        }
-    };
-    addAndMakeVisible(denominatorSelector);
+        dragStarted = false;
+        GgdButton::mouseDown(e);
+    }
 
-    barsLabel.setText("LENGTH", juce::dontSendNotification);
-    barsLabel.setFont(juce::Font(10.5f, juce::Font::bold));
-    barsLabel.setColour(juce::Label::textColourId, c(muted));
-    addAndMakeVisible(barsLabel);
-
-    barsSelector.setTooltip("Pattern length in bars");
-    barsSelector.onChange = [this]
+    void mouseDrag(const juce::MouseEvent& e) override
     {
-        const int bars = barsSelector.getSelectedId();
-        if (bars > 0)
+        if (!dragStarted && e.getDistanceFromDragStart() >= 5)
         {
-            activeBars = bars;
-            applyPatternGeometry();
+            dragStarted = true;
+            if (onBeginDrag)
+                onBeginDrag(this);
         }
-    };
-    addAndMakeVisible(barsSelector);
+    }
 
-    patternName.setMultiLine(false);
-    patternName.setReturnKeyStartsNewLine(false);
-    patternName.setInputRestrictions(SEQ_PATTERN_NAME_MAXLEN - 1);
-    patternName.setTextToShowWhenEmpty("Pattern name", c(muted));
+    void mouseUp(const juce::MouseEvent& e) override
+    {
+        if (!dragStarted)
+            GgdButton::mouseUp(e);
+        else
+            setState(juce::Button::buttonNormal);
+        dragStarted = false;
+    }
+
+private:
+    bool dragStarted = false;
+};
+
+//==============================================================================
+bool GgdDrumEditor::PatternState::sameContent(const PatternState& other) const
+{
+    return numerator == other.numerator && denominator == other.denominator && bars == other.bars
+        && name == other.name && events.size() == other.events.size()
+        && std::equal(events.begin(), events.end(), other.events.begin(), sameEvent)
+        && sameParkedList(parked, other.parked);
+}
+
+//==============================================================================
+GgdDrumEditor::GgdDrumEditor(SeqAudioProcessor& p)
+    : juce::AudioProcessorEditor(&p), processor(p), project(p.getProject())
+{
+    prefs = preferenceStore->load();
+    appliedTheme = prefs.theme;
+    ggdSetCurrentTheme(ggdThemeFromIndex(prefs.theme));
+    lookAndFeel.syncThemeColours();
+    setLookAndFeel(&lookAndFeel);
+    setOpaque(true);
+
+    // Timeline ----------------------------------------------------------------
+    GgdDrumGrid::Callbacks callbacks;
+    callbacks.onEdit = [this] { commitEdit(); };
+    callbacks.onSelectionChanged = [this] { handleSelectionChanged(); };
+    callbacks.onToolChanged = [this](GgdDrumGrid::ToolMode)
+    {
+        refreshHeader();
+        refreshContextStrip();
+    };
+    callbacks.onZoomChanged = [this](float zoom)
+    {
+        prefs.zoom = zoom;
+        grid->setSnapTicks(effectiveGridTicks());
+        refreshZoomControls();
+        preferenceStore->save(prefs);
+    };
+    callbacks.onUndo = [this] { undo(); };
+    callbacks.onRedo = [this] { redo(); };
+    callbacks.onStatus = [this](const juce::String& text) { showStatus(text); };
+    grid = std::make_unique<GgdDrumGrid>(processor, project, std::move(callbacks));
+
+    viewport.setViewedComponent(grid.get(), false);
+    viewport.setScrollBarsShown(true, true);
+    viewport.setScrollBarThickness(10);
+    viewport.setScrollOnDragMode(juce::Viewport::ScrollOnDragMode::never);
+    viewport.setWantsKeyboardFocus(false);
+    addAndMakeVisible(viewport);
+
+    // Header, row 1 -----------------------------------------------------------
+    slotStrip = std::make_unique<SlotStrip>();
+    slotStrip->onSelect = [this](int slot) { selectPatternSlot(slot); };
+    slotStrip->onMenu = [this](int slot) { showSlotMenu(slot); };
+    addAndMakeVisible(*slotStrip);
+
+    patternName.setFont(GgdFonts::medium(13.0f));
+    patternName.setJustification(juce::Justification::centredLeft);
+    patternName.setIndents(10, 0);
+    patternName.setSelectAllWhenFocused(true);
+    patternName.setTooltip("Pattern name, used when you save, export or drag the pattern");
     patternName.onReturnKey = [this]
     {
-        auto* layer = processor.mData.getUISeqData()->getLayer(0);
-        layer->setPatternName(patternName.getText().toRawUTF8());
-        publishModelChange();
-        patternName.giveAwayKeyboardFocus();
-        refreshPatternSelectorLabels();
+        renamePattern();
+        focusGrid();
     };
-    patternName.onFocusLost = [this]
+    patternName.onEscapeKey = [this]
     {
-        auto* layer = processor.mData.getUISeqData()->getLayer(0);
-        if (patternName.getText() != juce::String(layer->getPatternName()))
-        {
-            layer->setPatternName(patternName.getText().toRawUTF8());
-            publishModelChange();
-            refreshPatternSelectorLabels();
-        }
+        patternName.setText(nameOf(layer(), currentSlot()), false);
+        focusGrid();
     };
+    patternName.onFocusLost = [this] { renamePattern(); };
     addAndMakeVisible(patternName);
 
-    undoButton.setTooltip("Undo the most recent sequence edit (Ctrl+Z)");
-    undoButton.onClick = [this] { performUndo(); };
+    patternMenuButton.setTooltip("Pattern actions: duplicate, double length, save, import, export and clear");
+    patternMenuButton.onClick = [this] { showPatternMenu(); };
+    addAndMakeVisible(patternMenuButton);
+
+    transport = std::make_unique<TransportDisplay>();
+    addAndMakeVisible(*transport);
+
+    outputButton.setTooltip("Turns the notes Stochas GGD plays on or off. MIDI coming from the host always "
+                            "passes through. Saved with the project.");
+    outputButton.onClick = [this] { toggleOutput(); };
+    addAndMakeVisible(outputButton);
+
+    dragButton = std::make_unique<MidiDragButton>("Drag MIDI", GgdIcon::drag);
+    dragButton->setTooltip("Drag the current pattern onto a track in your DAW as a MIDI clip");
+    dragButton->setMouseCursor(juce::MouseCursor::DraggingHandCursor);
+    dragButton->onClick = [this]
+    {
+        showStatus("Drag the Drag MIDI button onto a track to drop the pattern as a MIDI clip");
+    };
+    dragButton->onBeginDrag = [this](juce::Component* source) { beginMidiDrag(source); };
+    addAndMakeVisible(*dragButton);
+
+    libraryButton.setStyle(GgdButton::Style::quiet);
+    libraryButton.setTooltip("Show or hide the groove and pattern library");
+    libraryButton.onClick = [this]
+    {
+        auto next = prefs;
+        next.showLibrary = !next.showLibrary;
+        applyPreferences(next, true);
+    };
+    addAndMakeVisible(libraryButton);
+
+    settingsButton.setStyle(GgdButton::Style::quiet);
+    settingsButton.setTooltip("Settings");
+    settingsButton.onClick = [this] { openSettings(); };
+    addAndMakeVisible(settingsButton);
+
+    // Header, row 2 -----------------------------------------------------------
+    drawButton.setSegment(false, true);
+    selectButton.setSegment(true, false);
+    drawButton.setTooltip("Draw: click to add hits, drag to paint, right-drag to erase " + shortcut("D"));
+    selectButton.setTooltip("Select: drag a box to select hits, then move, copy or transform them "
+                            + shortcut("S"));
+    drawButton.onClick = [this]
+    {
+        grid->setToolMode(GgdDrumGrid::ToolMode::draw);
+        focusGrid();
+    };
+    selectButton.onClick = [this]
+    {
+        grid->setToolMode(GgdDrumGrid::ToolMode::select);
+        focusGrid();
+    };
+    addAndMakeVisible(drawButton);
+    addAndMakeVisible(selectButton);
+
+    undoButton.setSegment(false, true);
+    redoButton.setSegment(true, false);
+    undoButton.setTooltip("Undo " + shortcut("Ctrl+Z"));
+    redoButton.setTooltip("Redo " + shortcut("Ctrl+Shift+Z"));
+    undoButton.onClick = [this] { undo(); };
+    redoButton.onClick = [this] { redo(); };
     addAndMakeVisible(undoButton);
+    addAndMakeVisible(redoButton);
 
-    duplicateButton.setTooltip("Duplicate the current pattern into the next slot");
-    duplicateButton.onClick = [this] { duplicateCurrentPattern(); };
-    addAndMakeVisible(duplicateButton);
+    for (int i = 1; i <= 32; ++i)
+        numeratorBox.addItem(juce::String(i), i);
+    for (const int d : denominators)
+        denominatorBox.addItem(juce::String(d), d);
+    numeratorBox.setTooltip("Beats per bar");
+    denominatorBox.setTooltip("Beat unit");
+    numeratorBox.onChange = [this]
+    {
+        if (numeratorBox.getSelectedId() > 0)
+            setMeter(numeratorBox.getSelectedId(), currentPattern().getDenominator());
+    };
+    denominatorBox.onChange = [this]
+    {
+        if (denominatorBox.getSelectedId() > 0)
+            setMeter(currentPattern().getNumerator(), denominatorBox.getSelectedId());
+    };
 
-    clearButton.setTooltip("Clear the current pattern");
-    clearButton.onClick = [this] { clearCurrentPattern(); };
-    addAndMakeVisible(clearButton);
+    barsStepper = std::make_unique<BarsStepper>();
+    barsStepper->setTooltip("Pattern length in bars. Click the number to type it, or scroll.");
+    barsStepper->onChange = [this](int bars) { setBars(bars); };
+    barsStepper->onEditingFinished = [this] { focusGrid(); };
+    addAndMakeVisible(*barsStepper);
 
-    hintLabel.setText(
-        "Paint: click/drag  |  Erase: right-drag  |  Velocity: Shift-drag or Alt+wheel  |  "
-        "Timing: Alt-drag  |  Zoom: Ctrl+wheel (1/4 > 1/8 > 1/16)  |  "
-        "Ghost: Ctrl+click  |  Roll: Ctrl+Shift+click  |  Hat articulation: Alt+Shift+wheel",
-        juce::dontSendNotification);
-    hintLabel.setFont(juce::Font(10.5f));
-    hintLabel.setColour(juce::Label::textColourId, c(muted));
-    addAndMakeVisible(hintLabel);
+    parkedButton.setStyle(GgdButton::Style::quiet);
+    parkedButton.onClick = [this]
+    {
+        juce::PopupMenu menu;
+        const int count = static_cast<int>(history[static_cast<size_t>(currentSlot())].parked.size());
+        menu.addSectionHeader(plural(count, "hidden hit", "hidden hits"));
+        menu.addItem(1, "Discard hidden hits");
+        auto safe = juce::Component::SafePointer<GgdDrumEditor>(this);
+        menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(parkedButton),
+                           [safe](int result)
+                           {
+                               if (auto* self = safe.getComponent(); self != nullptr && result == 1)
+                                   self->discardParkedHits();
+                           });
+    };
+    addChildComponent(parkedButton);
 
-    initialiseDrumState();
-    refreshControlsFromModel();
-    if (!maps.isEmpty())
-        grid->setMap(&maps.getReference(activeMapIndex));
+    for (int i = 0; i < static_cast<int>(std::size(gridChoices)); ++i)
+        gridBox.addItem(juce::String("Grid ") + gridChoices[i].name, i + 1);
+    gridBox.setTooltip("Grid: new hits, moves and Quantize snap to this division");
+    gridBox.onChange = [this]
+    {
+        const int index = gridBox.getSelectedId() - 1;
+        if (index >= 0 && index < static_cast<int>(std::size(gridChoices)))
+            setBaseGrid(gridChoices[index].ticks);
+    };
+
+    zoomSlider.setSliderStyle(juce::Slider::LinearHorizontal);
+    zoomSlider.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
+    zoomSlider.setRange(GgdDrumGrid::minZoomScale, GgdDrumGrid::maxZoomScale, 0.0);
+    zoomSlider.setSkewFactorFromMidPoint(GgdDrumGrid::defaultZoomScale);
+    zoomSlider.setDoubleClickReturnValue(true, GgdDrumGrid::defaultZoomScale);
+    zoomSlider.setMouseClickGrabsKeyboardFocus(false);
+    zoomSlider.setWantsKeyboardFocus(false);
+    zoomSlider.setTooltip("Timeline zoom (Ctrl + mouse wheel over the timeline)");
+    zoomSlider.onValueChange = [this] { grid->setZoomScale(static_cast<float>(zoomSlider.getValue())); };
+    addAndMakeVisible(zoomSlider);
+
+    zoomValueButton.setStyle(GgdButton::Style::quiet);
+    zoomValueButton.setTooltip("Reset zoom to 125%");
+    zoomValueButton.onClick = [this]
+    {
+        grid->resetZoom();
+        focusGrid();
+    };
+    addAndMakeVisible(zoomValueButton);
+
+    fitButton.setStyle(GgdButton::Style::quiet);
+    fitButton.setTooltip("Fit the whole pattern in view");
+    fitButton.onClick = [this]
+    {
+        grid->zoomToFit();
+        focusGrid();
+    };
+    addAndMakeVisible(fitButton);
+
+    for (int i = 0; i < project.getMaps().size(); ++i)
+        kitBox.addItem(project.getMaps().getReference(i).library, i + 1);
+    kitBox.setTooltip("Destination kit: decides which GGD note each row plays");
+    kitBox.onChange = [this]
+    {
+        if (kitBox.getSelectedId() > 0)
+            setKit(kitBox.getSelectedId() - 1);
+    };
+
+    syncBox.addItem("Sync: Host bars", 1);
+    syncBox.addItem("Sync: Free run", 2);
+    syncBox.setTooltip("Host bars: every pattern bar starts on a host bar line, so changing the host time "
+                       "signature never shifts the groove. Free run: the pattern loops on its own from the "
+                       "song start (polymeter).");
+    syncBox.onChange = [this]
+    {
+        setSyncMode(syncBox.getSelectedId() == 2 ? GgdTimeline::SyncMode::free : GgdTimeline::SyncMode::hostBars);
+    };
+
+    for (auto* box : { &numeratorBox, &denominatorBox, &gridBox, &kitBox, &syncBox })
+    {
+        box->setWantsKeyboardFocus(false);
+        box->setMouseClickGrabsKeyboardFocus(false);
+        addAndMakeVisible(*box);
+    }
+
+    // Context strip -----------------------------------------------------------
+    ghostButton.setSegment(false, true);
+    accentButton.setSegment(true, false);
+    ghostButton.setTooltip("Set the selected hits to ghost-note velocity (35)");
+    accentButton.setTooltip("Set the selected hits to accent velocity (120)");
+    ghostButton.onClick = [this] { grid->setSelectedVelocity(35); };
+    accentButton.onClick = [this] { grid->setSelectedVelocity(120); };
+
+    for (size_t i = 0; i < chanceButtons.size(); ++i)
+    {
+        auto& button = chanceButtons[i];
+        const int value = chanceValues[i];
+        button.setButtonText(juce::String(value) + "%");
+        button.setSegment(i > 0, i + 1 < chanceButtons.size());
+        button.setTooltip("Play the selected hits with " + juce::String(value) + "% probability");
+        button.onClick = [this, value] { grid->setSelectedProbability(value); };
+    }
+
+    quantizeButton.setSegment(false, true);
+    humanizeButton.setSegment(true, false);
+    quantizeButton.setTooltip("Snap the selected hits to the grid " + shortcut("Q"));
+    humanizeButton.setTooltip("Nudge timing and velocity of the selected hits slightly");
+    quantizeButton.onClick = [this] { grid->quantizeSelection(); };
+    humanizeButton.onClick = [this] { grid->humanizeSelection(); };
+
+    flamButton.setSegment(false, true);
+    doubleButton.setSegment(true, false);
+    flamButton.setTooltip("Add a quieter grace hit a 1/64 before each selected hit");
+    doubleButton.setTooltip("Add a follow-up hit a 1/32 after each selected hit");
+    flamButton.onClick = [this] { grid->createFlam(); };
+    doubleButton.onClick = [this] { grid->createDouble(); };
+
+    moreButton.setIcon(GgdIcon::menu);
+    moreButton.setTooltip("More transforms: velocity ramps, dynamics, fill, mirror, thin");
+    moreButton.onClick = [this] { showMoreMenu(); };
+
+    deleteButton.setStyle(GgdButton::Style::danger);
+    deleteButton.setTooltip("Delete the selected hits " + shortcut("Del"));
+    deleteButton.onClick = [this] { grid->deleteSelection(); };
+
+    for (auto* button : { &ghostButton, &accentButton, &quantizeButton, &humanizeButton, &flamButton,
+                          &doubleButton, &moreButton, &deleteButton })
+        addChildComponent(*button);
+    for (auto& button : chanceButtons)
+        addChildComponent(button);
+
+    // Library -----------------------------------------------------------------
+    browser = std::make_unique<GgdLibraryBrowser>();
+    browser->setGrooveOpenCallback([this](const juce::File& file) { loadGroove(file); });
+    browser->setPatternOpenCallback([this](const juce::File& file) { loadPatternFile(file); });
+    browser->setSavePatternCallback([this] { savePatternToLibrary(); });
+    addChildComponent(*browser);
+
+    preferenceStore->addChangeListener(this);
+
+    // State -------------------------------------------------------------------
+    grid->setKitMap(activeMap());
+    grid->setZoomScale(prefs.zoom);
+    applyPreferences(prefs, false);
+    ensureHistory(currentSlot());
 
     setResizable(true, true);
-    setResizeLimits(820, 520, 1800, 1300);
-    setSize(1120, 760);
-    startTimerHz(30);
+    setResizeLimits(1200, 660, 4096, 2600);
+    setSize(juce::jlimit(1200, 4096, prefs.editorWidth), juce::jlimit(660, 2600, prefs.editorHeight));
+
+    // Components created before they were parented initialised themselves
+    // with the default look and feel; let them pick up ours.
+    sendLookAndFeelChange();
+    refreshAll();
+
+    vblank = std::make_unique<juce::VBlankAttachment>(this, [this] { renderFrame(); });
+    startTimerHz(10);
 }
 
 GgdDrumEditor::~GgdDrumEditor()
 {
     stopTimer();
-    gridViewport.setViewedComponent(nullptr, false);
+    vblank.reset();
+    preferenceStore->removeChangeListener(this);
+    settingsPanel.reset();
+    viewport.setViewedComponent(nullptr, false);
     setLookAndFeel(nullptr);
+}
+
+juce::String GgdDrumEditor::shortcut(const juce::String& keys)
+{
+    const bool mac = (juce::SystemStats::getOperatingSystemType() & juce::SystemStats::MacOSX) != 0;
+    auto text = keys;
+    if (mac)
+        text = text.replace("Ctrl+", juce::String::fromUTF8("\xe2\x8c\x98")).replace("Shift+", juce::String::fromUTF8("\xe2\x87\xa7"));
+    return "(" + text + ")";
+}
+
+//==============================================================================
+void GgdDrumEditor::timerCallback()
+{
+    // Fallback for hosts or windows that stop delivering display callbacks.
+    if (nowMs() - lastFrameMs > 100.0)
+        renderFrame();
+}
+
+void GgdDrumEditor::renderFrame()
+{
+    const double now = nowMs();
+    lastFrameMs = now;
+
+    if (processor.mNotifier.doesUINeedUpdate())
+        reloadFromProcessor();
+
+    if (!focusGivenToGrid && isShowing() && settingsPanel == nullptr)
+    {
+        focusGrid();
+        focusGivenToGrid = grid->hasKeyboardFocus(true);
+    }
+
+    const auto* focused = juce::Component::getCurrentlyFocusedComponent();
+    const bool typing = dynamic_cast<const juce::TextEditor*>(focused) != nullptr;
+    grid->pollKeyboard(!typing && settingsPanel == nullptr && grid->hasKeyboardFocus(true));
+
+    grid->updatePlayback();
+    updateTransport();
+    updatePlayheadFollow();
+
+    if (statusText.isNotEmpty() && now > statusUntilMs)
+    {
+        statusText.clear();
+        repaint(contextArea);
+    }
+}
+
+void GgdDrumEditor::changeListenerCallback(juce::ChangeBroadcaster*)
+{
+    // Another window (or this one) saved preferences. Layout choices stay
+    // per window; everything from the settings sheet is shared.
+    auto loaded = preferenceStore->load();
+    loaded.zoom = prefs.zoom;
+    loaded.gridTicks = prefs.gridTicks;
+    loaded.showLibrary = prefs.showLibrary;
+    loaded.editorWidth = prefs.editorWidth;
+    loaded.editorHeight = prefs.editorHeight;
+    if (loaded != prefs || loaded.theme != appliedTheme)
+        applyPreferences(loaded, false);
+}
+
+void GgdDrumEditor::reloadFromProcessor()
+{
+    // The host replaced the project (preset load, undo in the host...).
+    resetHistories();
+    grid->setKitMap(activeMap());
+    grid->patternGeometryChanged();
+    ensureHistory(currentSlot());
+    if (browser != nullptr)
+        browser->clearLoaded();
+    refreshAll();
+}
+
+void GgdDrumEditor::updateTransport()
+{
+    GgdPlayheadSnapshot snapshot;
+    const bool have = processor.readPlayhead(snapshot);
+    const bool playing = have && snapshot.playing;
+
+    if (playing && snapshot.hostMeterKnown
+        && (snapshot.hostNumerator != hostNumerator || snapshot.hostDenominator != hostDenominator
+            || !hostMeterKnown))
+    {
+        hostMeterKnown = true;
+        hostNumerator = snapshot.hostNumerator;
+        hostDenominator = snapshot.hostDenominator;
+    }
+    transportPlaying = playing;
+
+    TransportDisplay::State state;
+    state.playing = playing;
+    state.muted = playing ? snapshot.muted : layer().getMuted();
+
+    if (playing)
+    {
+        const double tick = snapshot.tickAt(nowMs());
+        const auto* playingPattern = layer().getEventPattern(juce::jlimit(0, SEQ_MAX_PATTERNS - 1, snapshot.pattern));
+        if (tick >= 0.0 && playingPattern != nullptr)
+        {
+            const int barTicks = juce::jmax(1, playingPattern->getBarTicks());
+            const int beatTicks = juce::jmax(1, GGD_EVENT_PPQ * 4 / playingPattern->getDenominator());
+            const int whole = static_cast<int>(tick);
+            state.position = juce::String(whole / barTicks + 1) + "." + juce::String((whole % barTicks) / beatTicks + 1);
+        }
+        else
+        {
+            state.resting = true;
+        }
+    }
+
+    const auto& pattern = currentPattern();
+    const bool barsSync = ui().getSyncMode() == GgdTimeline::SyncMode::hostBars;
+    if (hostMeterKnown)
+    {
+        state.hostMeter = "Host " + juce::String(hostNumerator) + "/" + juce::String(hostDenominator);
+        const double hostBar = GgdTimeline::barQuartersForMeter(hostNumerator, hostDenominator);
+        const double patternBar = static_cast<double>(pattern.getBarTicks()) / GGD_EVENT_PPQ;
+        state.mismatch = barsSync && std::abs(hostBar - patternBar) > 1.0e-6;
+    }
+
+    transport->setState(state);
+
+    juce::String tip;
+    if (state.mismatch)
+        tip << "The host bar is " << hostNumerator << "/" << hostDenominator << " but this pattern is "
+            << pattern.getNumerator() << "/" << pattern.getDenominator()
+            << ". With Sync: Host bars every pattern bar still starts on a host bar line: "
+               "shorter bars rest until the next host bar, longer bars are cut short. "
+               "Choose Sync: Free run for polymeter loops.";
+    else if (playing)
+        tip = "Bar.beat of the playing pattern";
+    else
+        tip = "Follows the host transport";
+    if (transport->getTooltip() != tip)
+        transport->setTooltip(tip);
+
+    std::array<bool, SEQ_MAX_PATTERNS> content {};
+    for (int i = 0; i < SEQ_MAX_PATTERNS; ++i)
+        content[static_cast<size_t>(i)] = slotHasContent(i);
+    playingSlot = playing ? snapshot.pattern : -1;
+    slotStrip->setState(currentSlot(), playingSlot, content);
+}
+
+void GgdDrumEditor::updatePlayheadFollow()
+{
+    const int viewWidth = viewport.getViewWidth();
+    const int inset = grid->getTimelineInsetPixels();
+    const int timelineWidth = juce::jmax(1, viewWidth - inset);
+    const bool overflow = grid->getTimelineContentWidthPixels() > static_cast<float>(timelineWidth) + 1.0f;
+    const bool following = prefs.followPlayhead && transportPlaying && overflow;
+
+    if (!following)
+    {
+        if (followPadded)
+        {
+            grid->setTrailingPadding(0);
+            followPadded = false;
+        }
+        followSetViewX = -1;
+        return;
+    }
+
+    // Pad the end so the playhead can reach the centre on the last bar.
+    if (!followPadded)
+    {
+        grid->setTrailingPadding(timelineWidth / 2 + 12);
+        followPadded = true;
+    }
+
+    const int currentX = viewport.getViewPositionX();
+    if (followSetViewX >= 0 && currentX != followSetViewX)
+        followPausedUntilMs = nowMs() + 2500.0; // the user scrolled: let them look around
+    followSetViewX = -1;
+
+    const float playX = grid->getPlayheadContentX();
+    if (playX < 0.0f || grid->isMouseButtonDown() || nowMs() < followPausedUntilMs)
+        return;
+
+    const int centre = inset + timelineWidth / 2;
+    const int maxX = juce::jmax(0, grid->getWidth() - viewWidth);
+    const int target = juce::jlimit(0, maxX, juce::roundToInt(playX) - centre);
+    if (target != currentX)
+        viewport.setViewPosition(target, viewport.getViewPositionY());
+    followSetViewX = viewport.getViewPositionX();
+}
+
+//==============================================================================
+void GgdDrumEditor::applyPreferences(const GgdPreferences& next, bool save)
+{
+    const bool themeChanged = next.theme != appliedTheme;
+    const bool libraryChanged = next.showLibrary != prefs.showLibrary;
+    prefs = next;
+
+    if (themeChanged)
+    {
+        appliedTheme = prefs.theme;
+        ggdSetCurrentTheme(ggdThemeFromIndex(prefs.theme));
+        lookAndFeel.syncThemeColours();
+        patternName.setColour(juce::TextEditor::backgroundColourId, tc(GgdThemeRole::panelRaised));
+        patternName.applyColourToAllText(tc(GgdThemeRole::text));
+        sendLookAndFeelChange();
+        if (browser != nullptr)
+            browser->themeChanged();
+    }
+    patternName.setColour(juce::TextEditor::backgroundColourId, tc(GgdThemeRole::panelRaised));
+    patternName.setTextToShowWhenEmpty("Name this pattern", tc(GgdThemeRole::faint));
+
+    GgdDrumGrid::Preferences gp;
+    gp.smoothPlayhead = prefs.smoothPlayhead;
+    gp.playheadGlow = prefs.playheadGlow;
+    gp.shiftHoverVelocity = prefs.shiftHoverVelocity;
+    gp.audition = prefs.audition;
+    gp.colourByInstrument = prefs.colourByInstrument;
+    gp.playedEffects = prefs.playedEffects;
+    gp.playedRipple = prefs.playedRipple;
+    gp.playedLaneFlash = prefs.playedLaneFlash;
+    gp.velocityReactive = prefs.velocityReactive;
+    gp.reduceMotion = prefs.reduceMotion;
+    gp.effectIntensity = static_cast<float>(prefs.effectIntensityPercent) / 100.0f;
+    gp.effectDecayMs = prefs.effectDecayMs;
+    grid->setPreferences(gp);
+    grid->setSnapTicks(effectiveGridTicks());
+
+    if (browser != nullptr)
+        browser->setVisible(prefs.showLibrary);
+    if (libraryChanged)
+        resized();
+
+    if (save)
+        preferenceStore->save(prefs);
+
+    refreshAll();
+    repaint();
+}
+
+int GgdDrumEditor::effectiveGridTicks() const
+{
+    const bool fine = prefs.autoFineGrid && grid != nullptr && grid->getZoomScale() >= fineGridZoom;
+    return fine ? finerGrid(prefs.gridTicks) : prefs.gridTicks;
+}
+
+void GgdDrumEditor::setBaseGrid(int ticks)
+{
+    if (prefs.gridTicks != ticks)
+    {
+        prefs.gridTicks = ticks;
+        preferenceStore->save(prefs);
+    }
+    grid->setSnapTicks(effectiveGridTicks());
+    refreshHeader();
+    focusGrid();
+}
+
+//==============================================================================
+GgdDrumEditor::PatternState GgdDrumEditor::capture(int slot) const
+{
+    PatternState state;
+    const auto* pattern = layer().getEventPattern(slot);
+    state.numerator = pattern->getNumerator();
+    state.denominator = pattern->getDenominator();
+    state.bars = pattern->getBars();
+    state.events.reserve(static_cast<size_t>(pattern->getEventCount()));
+    for (int i = 0; i < pattern->getEventCount(); ++i)
+        state.events.push_back(*pattern->getEvent(i));
+    state.name = nameOf(layer(), slot);
+
+    const auto& slotHistory = history[static_cast<size_t>(slot)];
+    state.parked = slotHistory.parked;
+    state.source = slotHistory.source;
+    state.sourceIsPattern = slotHistory.sourceIsPattern;
+    if (slot == currentSlot() && grid != nullptr)
+        state.selection = grid->getSelectionCoordinates();
+    return state;
+}
+
+bool GgdDrumEditor::liveMatches(const PatternState& state, int slot) const
+{
+    const auto* pattern = layer().getEventPattern(slot);
+    if (pattern->getNumerator() != state.numerator || pattern->getDenominator() != state.denominator
+        || pattern->getBars() != state.bars || pattern->getEventCount() != static_cast<int>(state.events.size())
+        || nameOf(layer(), slot) != state.name
+        || !sameParkedList(history[static_cast<size_t>(slot)].parked, state.parked))
+        return false;
+
+    for (int i = 0; i < pattern->getEventCount(); ++i)
+        if (!sameEvent(*pattern->getEvent(i), state.events[static_cast<size_t>(i)]))
+            return false;
+    return true;
+}
+
+void GgdDrumEditor::restore(int slot, const PatternState& state)
+{
+    auto* pattern = layer().getEventPattern(slot);
+    pattern->clear(false);
+    pattern->activate(state.numerator, state.denominator, state.bars);
+    for (const auto& event : state.events)
+        pattern->addEvent(event.row, event.tick, event.velocity, event.probability, event.durationTicks);
+    layer().setPatternName(state.name.toRawUTF8(), slot);
+
+    auto& slotHistory = history[static_cast<size_t>(slot)];
+    slotHistory.parked = state.parked;
+    slotHistory.source = state.source;
+    slotHistory.sourceIsPattern = state.sourceIsPattern;
+
+    if (slot == currentSlot())
+        GgdProject::syncLegacyStepCount(layer());
+}
+
+void GgdDrumEditor::ensureHistory(int slot)
+{
+    auto& slotHistory = history[static_cast<size_t>(slot)];
+    if (!slotHistory.valid)
+    {
+        slotHistory.committed = capture(slot);
+        slotHistory.valid = true;
+    }
+}
+
+void GgdDrumEditor::resetHistories()
+{
+    for (auto& slotHistory : history)
+        slotHistory = SlotHistory();
+}
+
+void GgdDrumEditor::commitEdit()
+{
+    commitSlotEdit(currentSlot());
+}
+
+void GgdDrumEditor::commitSlotEdit(int slot)
+{
+    if (slot == currentSlot())
+        GgdProject::syncLegacyStepCount(layer());
+    processor.publishEdit(true);
+
+    auto& slotHistory = history[static_cast<size_t>(slot)];
+    auto present = capture(slot);
+    if (!slotHistory.valid)
+    {
+        slotHistory.committed = std::move(present);
+        slotHistory.valid = true;
+    }
+    else if (!present.sameContent(slotHistory.committed))
+    {
+        slotHistory.undo.push_back(std::move(slotHistory.committed));
+        while (slotHistory.undo.size() > maxHistory)
+            slotHistory.undo.pop_front();
+        slotHistory.redo.clear();
+        slotHistory.committed = std::move(present);
+    }
+    else
+    {
+        slotHistory.committed.selection = std::move(present.selection);
+    }
+
+    refreshAll();
+}
+
+void GgdDrumEditor::handleSelectionChanged()
+{
+    if (!restoringHistory)
+    {
+        const int slot = currentSlot();
+        auto& slotHistory = history[static_cast<size_t>(slot)];
+        // Remember the selection that belongs to the committed content, so
+        // undo can bring back what was selected before an edit.
+        if (slotHistory.valid && liveMatches(slotHistory.committed, slot))
+            slotHistory.committed.selection = grid->getSelectionCoordinates();
+    }
+    refreshContextStrip();
+}
+
+void GgdDrumEditor::applyHistoryState(int slot, const PatternState& state)
+{
+    restoringHistory = true;
+    restore(slot, state);
+    processor.publishEdit(true);
+    grid->patternGeometryChanged();
+    grid->restoreSelectionCoordinates(state.selection);
+    restoringHistory = false;
+    updateBrowserHighlight();
+    refreshAll();
+}
+
+void GgdDrumEditor::undo()
+{
+    const int slot = currentSlot();
+    auto& slotHistory = history[static_cast<size_t>(slot)];
+    if (slotHistory.valid && !liveMatches(slotHistory.committed, slot))
+        commitSlotEdit(slot); // keep anything not yet recorded redoable
+    if (slotHistory.undo.empty())
+    {
+        showStatus("Nothing to undo in this pattern");
+        return;
+    }
+
+    slotHistory.redo.push_back(capture(slot));
+    auto target = std::move(slotHistory.undo.back());
+    slotHistory.undo.pop_back();
+    applyHistoryState(slot, target);
+    slotHistory.committed = std::move(target);
+    refreshHistoryButtons();
+}
+
+void GgdDrumEditor::redo()
+{
+    const int slot = currentSlot();
+    auto& slotHistory = history[static_cast<size_t>(slot)];
+    if (slotHistory.redo.empty())
+    {
+        showStatus("Nothing to redo");
+        return;
+    }
+
+    slotHistory.undo.push_back(capture(slot));
+    auto target = std::move(slotHistory.redo.back());
+    slotHistory.redo.pop_back();
+    applyHistoryState(slot, target);
+    slotHistory.committed = std::move(target);
+    refreshHistoryButtons();
+}
+
+//==============================================================================
+void GgdDrumEditor::selectPatternSlot(int slot)
+{
+    slot = juce::jlimit(0, SEQ_MAX_PATTERNS - 1, slot);
+    if (slot == currentSlot())
+    {
+        focusGrid();
+        return;
+    }
+
+    // Keep the outgoing selection for when we come back.
+    const int outgoing = currentSlot();
+    auto& outgoingHistory = history[static_cast<size_t>(outgoing)];
+    if (outgoingHistory.valid && liveMatches(outgoingHistory.committed, outgoing))
+        outgoingHistory.committed.selection = grid->getSelectionCoordinates();
+
+    if (patternName.hasKeyboardFocus(true))
+        renamePattern();
+
+    layer().setCurrentPattern(slot);
+    GgdProject::syncLegacyStepCount(layer());
+    processor.publishEdit(true);
+    ensureHistory(slot);
+
+    restoringHistory = true;
+    grid->patternGeometryChanged();
+    grid->restoreSelectionCoordinates(history[static_cast<size_t>(slot)].committed.selection);
+    restoringHistory = false;
+
+    updateBrowserHighlight();
+    refreshAll();
+    focusGrid();
+}
+
+void GgdDrumEditor::setMeter(int numerator, int denominator)
+{
+    auto& pattern = currentPattern();
+    auto& parked = history[static_cast<size_t>(currentSlot())].parked;
+    const auto parkedBefore = parked.size();
+    if (GgdPatternOps::changeGeometry(pattern, numerator, denominator, pattern.getBars(), parked))
+    {
+        grid->patternGeometryChanged();
+        commitEdit();
+        if (parked.size() > parkedBefore)
+            showStatus(plural(static_cast<int>(parked.size() - parkedBefore), "hit doesn't", "hits don't")
+                       + " fit " + juce::String(pattern.getNumerator()) + "/" + juce::String(pattern.getDenominator())
+                       + " and " + (parked.size() - parkedBefore == 1 ? "is" : "are")
+                       + " hidden. Lengthen the bars again to bring them back.");
+        else if (parked.size() < parkedBefore)
+            showStatus(plural(static_cast<int>(parkedBefore - parked.size()), "hidden hit is", "hidden hits are")
+                       + " back");
+    }
+    refreshHeader();
+    focusGrid();
+}
+
+void GgdDrumEditor::setBars(int bars)
+{
+    auto& pattern = currentPattern();
+    auto& parked = history[static_cast<size_t>(currentSlot())].parked;
+    const auto parkedBefore = parked.size();
+    if (GgdPatternOps::changeGeometry(pattern, pattern.getNumerator(), pattern.getDenominator(), bars, parked))
+    {
+        grid->patternGeometryChanged();
+        commitEdit();
+        if (parked.size() > parkedBefore)
+            showStatus(plural(static_cast<int>(parked.size() - parkedBefore), "hit is", "hits are")
+                       + " hidden past bar " + juce::String(pattern.getBars())
+                       + ". Add the bars back to restore them.");
+        else if (parked.size() < parkedBefore)
+            showStatus(plural(static_cast<int>(parkedBefore - parked.size()), "hidden hit is", "hidden hits are")
+                       + " back");
+    }
+    refreshHeader();
+}
+
+void GgdDrumEditor::discardParkedHits()
+{
+    auto& parked = history[static_cast<size_t>(currentSlot())].parked;
+    if (parked.empty())
+        return;
+    const int count = static_cast<int>(parked.size());
+    parked.clear();
+    commitEdit();
+    showStatus(plural(count, "hidden hit", "hidden hits") + " discarded");
+}
+
+void GgdDrumEditor::renamePattern()
+{
+    const int slot = currentSlot();
+    auto desired = fitPatternName(patternName.getText());
+    if (desired.isEmpty())
+        desired = SEQ_DEFAULT_PAT_NAME;
+    if (desired == nameOf(layer(), slot))
+    {
+        refreshHeader();
+        return;
+    }
+    layer().setPatternName(desired.toRawUTF8(), slot);
+    commitEdit();
+}
+
+void GgdDrumEditor::clearPattern()
+{
+    const int slot = currentSlot();
+    auto& slotHistory = history[static_cast<size_t>(slot)];
+    currentPattern().clear(true);
+    slotHistory.parked.clear();
+    slotHistory.source = juce::File();
+    grid->patternReplaced();
+    commitEdit();
+    updateBrowserHighlight();
+    showStatus("Pattern cleared. Undo brings it back.");
+}
+
+void GgdDrumEditor::doublePatternLength()
+{
+    if (!GgdPatternOps::duplicateBars(currentPattern()))
+    {
+        showStatus("The pattern can't double: it would be longer than " + juce::String(GGD_MAX_PATTERN_BARS)
+                   + " bars of 4/4");
+        return;
+    }
+    grid->patternGeometryChanged();
+    commitEdit();
+    showStatus("Doubled to " + plural(currentPattern().getBars(), "bar", "bars"));
+}
+
+void GgdDrumEditor::duplicateToEmptySlot()
+{
+    const int source = currentSlot();
+    int target = -1;
+    for (int offset = 1; offset < SEQ_MAX_PATTERNS && target < 0; ++offset)
+    {
+        const int candidate = (source + offset) % SEQ_MAX_PATTERNS;
+        if (!slotHasContent(candidate))
+            target = candidate;
+    }
+    if (target < 0)
+    {
+        showStatus("All 8 slots hold patterns. Right-click a slot to clear it first.");
+        return;
+    }
+    copyPatternToSlot(target);
+}
+
+void GgdDrumEditor::copyPatternToSlot(int target)
+{
+    const int source = currentSlot();
+    if (target == source)
+        return;
+
+    ensureHistory(target);
+    ui().copyPatternData(GgdProject::drumLayer, target, GgdProject::drumLayer, source);
+    const auto name = fitPatternName(displayName(layer(), source) + " copy");
+    layer().setPatternName(name.toRawUTF8(), target);
+    auto& targetHistory = history[static_cast<size_t>(target)];
+    targetHistory.parked.clear();
+    targetHistory.source = juce::File();
+    commitSlotEdit(target);
+    showStatus("Copied to slot " + juce::String(target + 1) + ". Click it to edit the copy.");
+}
+
+void GgdDrumEditor::clearSlot(int slot)
+{
+    if (slot == currentSlot())
+    {
+        clearPattern();
+        return;
+    }
+    ensureHistory(slot);
+    auto* pattern = layer().getEventPattern(slot);
+    pattern->clear(true);
+    layer().setPatternName(SEQ_DEFAULT_PAT_NAME, slot);
+    auto& slotHistory = history[static_cast<size_t>(slot)];
+    slotHistory.parked.clear();
+    slotHistory.source = juce::File();
+    commitSlotEdit(slot);
+    showStatus("Slot " + juce::String(slot + 1) + " cleared. Open it and undo to bring it back.");
+}
+
+void GgdDrumEditor::toggleOutput()
+{
+    layer().setMuted(!layer().getMuted());
+    processor.publishEdit(true);
+    refreshHeader();
+    showStatus(layer().getMuted() ? "Sequencer output off. MIDI from the host still passes through."
+                                  : "Sequencer output on");
+    focusGrid();
+}
+
+void GgdDrumEditor::setKit(int index)
+{
+    if (index == project.getActiveMapIndex(ui()))
+        return;
+    project.setActiveMap(ui(), index);
+    processor.publishEdit(true);
+    grid->setKitMap(activeMap());
+    refreshAll();
+    if (const auto* map = activeMap())
+        showStatus("Rows now play " + map->library + " notes");
+    focusGrid();
+}
+
+void GgdDrumEditor::setSyncMode(GgdTimeline::SyncMode mode)
+{
+    if (ui().getSyncMode() != mode)
+    {
+        ui().setSyncMode(mode);
+        processor.publishEdit(true);
+        showStatus(mode == GgdTimeline::SyncMode::hostBars
+                       ? "Sync: every pattern bar starts on a host bar line"
+                       : "Sync: the pattern loops on its own from the song start");
+    }
+    refreshHeader();
+    focusGrid();
+}
+
+void GgdDrumEditor::showPatternMenu()
+{
+    const auto& pattern = currentPattern();
+    const auto& slotHistory = history[static_cast<size_t>(currentSlot())];
+    const bool hasHits = pattern.getEventCount() > 0;
+    const bool canDouble = pattern.getBars() * 2
+                        <= GgdPatternOps::maxBarsFor(pattern.getNumerator(), pattern.getDenominator());
+
+    juce::PopupMenu menu;
+    menu.addSectionHeader(displayName(layer(), currentSlot()));
+    menu.addItem(1, "Duplicate to an empty slot");
+    menu.addItem(2, "Double length (repeat the bars)", canDouble);
+    menu.addSeparator();
+    menu.addItem(3, "Save to pattern library...");
+    menu.addItem(4, "Import MIDI groove...");
+    menu.addItem(5, "Export MIDI file...", hasHits);
+    menu.addSeparator();
+    menu.addItem(6, "Clear pattern", hasHits || !slotHistory.parked.empty());
+
+    auto safe = juce::Component::SafePointer<GgdDrumEditor>(this);
+    menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(patternMenuButton).withMinimumWidth(230),
+                       [safe](int result)
+                       {
+                           auto* self = safe.getComponent();
+                           if (self == nullptr)
+                               return;
+                           switch (result)
+                           {
+                               case 1: self->duplicateToEmptySlot(); break;
+                               case 2: self->doublePatternLength(); break;
+                               case 3: self->savePatternToLibrary(); break;
+                               case 4: self->chooseMidiToImport(); break;
+                               case 5: self->exportMidiFile(); break;
+                               case 6: self->clearPattern(); break;
+                               default: break;
+                           }
+                           self->focusGrid();
+                       });
+}
+
+void GgdDrumEditor::showMoreMenu()
+{
+    const int count = grid->getSelectedCount();
+    juce::PopupMenu menu;
+    menu.addSectionHeader("Velocity");
+    menu.addItem(1, "Ramp up", count >= 2);
+    menu.addItem(2, "Ramp down", count >= 2);
+    menu.addItem(3, "Compress dynamics", count >= 2);
+    menu.addItem(4, "Expand dynamics", count >= 2);
+    menu.addSectionHeader("Timing");
+    menu.addItem(5, "Flam (grace hit before)", count >= 1);
+    menu.addItem(6, "Double (hit after)", count >= 1);
+    menu.addItem(7, "Humanize", count >= 1);
+    menu.addSectionHeader("Shape");
+    menu.addItem(8, "Fill the gaps on the grid", count >= 2);
+    menu.addItem(9, "Mirror timing", count >= 2);
+    menu.addItem(10, "Thin out (remove every other hit)", count >= 2);
+    menu.addItem(11, "Select the whole rows", count >= 1);
+
+    auto safe = juce::Component::SafePointer<GgdDrumEditor>(this);
+    menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(moreButton).withMinimumWidth(220),
+                       [safe](int result)
+                       {
+                           auto* self = safe.getComponent();
+                           if (self == nullptr)
+                               return;
+                           auto& g = *self->grid;
+                           switch (result)
+                           {
+                               case 1: g.rampSelectedVelocity(true); break;
+                               case 2: g.rampSelectedVelocity(false); break;
+                               case 3: g.scaleSelectedVelocityRange(0.65f); break;
+                               case 4: g.scaleSelectedVelocityRange(1.45f); break;
+                               case 5: g.createFlam(); break;
+                               case 6: g.createDouble(); break;
+                               case 7: g.humanizeSelection(); break;
+                               case 8: g.fillSelectionGaps(); break;
+                               case 9: g.mirrorSelection(); break;
+                               case 10: g.thinSelection(); break;
+                               case 11: g.selectRowsContainingSelection(); break;
+                               default: break;
+                           }
+                           self->focusGrid();
+                       });
+}
+
+void GgdDrumEditor::showSlotMenu(int slot)
+{
+    const bool other = slot != currentSlot();
+    juce::PopupMenu menu;
+    menu.addSectionHeader("Slot " + juce::String(slot + 1) + "  " + displayName(layer(), slot));
+    menu.addItem(1, "Open", other);
+    menu.addItem(2, "Copy the current pattern here", other);
+    menu.addSeparator();
+    menu.addItem(3, "Clear slot", slotHasContent(slot));
+
+    auto safe = juce::Component::SafePointer<GgdDrumEditor>(this);
+    menu.showMenuAsync(juce::PopupMenu::Options().withMinimumWidth(220),
+                       [safe, slot](int result)
+                       {
+                           auto* self = safe.getComponent();
+                           if (self == nullptr)
+                               return;
+                           if (result == 1)
+                               self->selectPatternSlot(slot);
+                           else if (result == 2)
+                               self->copyPatternToSlot(slot);
+                           else if (result == 3)
+                               self->clearSlot(slot);
+                       });
+}
+
+//==============================================================================
+void GgdDrumEditor::loadGroove(const juce::File& file)
+{
+    const auto* map = activeMap();
+    if (map == nullptr)
+        return;
+
+    const auto result = GgdMidiImporter::parseFile(file, *map, project.getCanonicalRows(), GGD_MAX_PATTERN_TICKS);
+    if (!result.ok)
+    {
+        showAlert("MIDI import failed", result.error);
+        return;
+    }
+
+    const int slot = currentSlot();
+    auto& pattern = currentPattern();
+    pattern.clear(false);
+    pattern.activate(result.numerator, result.denominator, result.bars);
+    for (const auto& imported : result.events)
+        if (imported.canonicalRow >= 0 && imported.canonicalRow < project.getCanonicalRows().size())
+            pattern.addEvent(project.storageRowForCanonical(imported.canonicalRow), imported.tick,
+                             imported.velocity, SEQ_PROB_ON, imported.durationTicks);
+
+    layer().setPatternName(fitPatternName(result.fileName).toRawUTF8(), slot);
+    auto& slotHistory = history[static_cast<size_t>(slot)];
+    slotHistory.parked.clear();
+    slotHistory.source = file;
+    slotHistory.sourceIsPattern = false;
+
+    grid->patternGeometryChanged();
+    commitEdit();
+    viewport.setViewPosition(0, viewport.getViewPositionY());
+    updateBrowserHighlight();
+    showStatus("Loaded " + file.getFileNameWithoutExtension() + "  |  " + result.summary());
+}
+
+void GgdDrumEditor::loadPatternFile(const juce::File& file)
+{
+    GgdPatternSnapshot snapshot;
+    juce::String error;
+    if (!GgdPatternFile::read(file, snapshot, error))
+    {
+        showAlert("Pattern load failed", error);
+        return;
+    }
+
+    const int slot = currentSlot();
+    GgdPatternFile::restore(snapshot, ui(), project, GgdProject::drumLayer, slot);
+    auto& slotHistory = history[static_cast<size_t>(slot)];
+    slotHistory.parked.clear();
+    slotHistory.source = file;
+    slotHistory.sourceIsPattern = true;
+
+    grid->patternGeometryChanged();
+    commitEdit();
+    viewport.setViewPosition(0, viewport.getViewPositionY());
+    updateBrowserHighlight();
+    showStatus("Loaded pattern " + displayName(layer(), slot) + ". Undo brings back what was here.");
+}
+
+void GgdDrumEditor::chooseMidiToImport()
+{
+    auto start = browser != nullptr ? browser->getGrooveRoot() : juce::File();
+    if (!start.isDirectory())
+        start = juce::File::getSpecialLocation(juce::File::userDocumentsDirectory);
+
+    chooser = std::make_unique<juce::FileChooser>("Import a GGD MIDI groove", start, "*.mid;*.midi");
+    auto safe = juce::Component::SafePointer<GgdDrumEditor>(this);
+    chooser->launchAsync(juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
+                         [safe](const juce::FileChooser& fc)
+                         {
+                             if (auto* self = safe.getComponent())
+                             {
+                                 const auto file = fc.getResult();
+                                 if (file.existsAsFile())
+                                     self->loadGroove(file);
+                             }
+                         });
+}
+
+juce::String GgdDrumEditor::currentPatternFileName() const
+{
+    return juce::File::createLegalFileName(displayName(layer(), currentSlot()));
+}
+
+void GgdDrumEditor::savePatternToLibrary()
+{
+    const int slot = currentSlot();
+    const auto snapshot = GgdPatternFile::capture(layer(), project, slot);
+
+    auto root = browser != nullptr ? browser->getPatternRoot() : juce::File();
+    if (!root.isDirectory())
+        root = juce::File::getSpecialLocation(juce::File::userDocumentsDirectory);
+    const auto suggested = root.getChildFile(currentPatternFileName()).withFileExtension(GgdPatternFile::extension);
+
+    chooser = std::make_unique<juce::FileChooser>("Save Stochas GGD pattern", suggested, "*.sggdp");
+    auto safe = juce::Component::SafePointer<GgdDrumEditor>(this);
+    chooser->launchAsync(juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles
+                             | juce::FileBrowserComponent::warnAboutOverwriting,
+                         [safe, snapshot, slot](const juce::FileChooser& fc)
+                         {
+                             auto* self = safe.getComponent();
+                             if (self == nullptr)
+                                 return;
+                             auto file = fc.getResult();
+                             if (file == juce::File())
+                                 return;
+                             juce::String error;
+                             if (!GgdPatternFile::write(file, snapshot, error))
+                             {
+                                 self->showAlert("Pattern save failed", error);
+                                 return;
+                             }
+                             if (!file.hasFileExtension(GgdPatternFile::extension))
+                                 file = file.withFileExtension(GgdPatternFile::extension);
+
+                             auto& slotHistory = self->history[static_cast<size_t>(slot)];
+                             slotHistory.source = file;
+                             slotHistory.sourceIsPattern = true;
+                             if (self->browser != nullptr)
+                                 self->browser->refresh();
+                             self->updateBrowserHighlight();
+                             self->showStatus("Saved " + file.getFileName());
+                         });
+}
+
+void GgdDrumEditor::exportMidiFile()
+{
+    const auto* map = activeMap();
+    if (map == nullptr)
+        return;
+
+    const auto snapshot = GgdPatternFile::capture(layer(), project, currentSlot());
+    const auto kit = *map;
+    auto root = browser != nullptr ? browser->getPatternRoot() : juce::File();
+    if (!root.isDirectory())
+        root = juce::File::getSpecialLocation(juce::File::userDocumentsDirectory);
+    const auto suggested = root.getChildFile(currentPatternFileName()).withFileExtension(".mid");
+
+    chooser = std::make_unique<juce::FileChooser>("Export the pattern as MIDI", suggested, "*.mid;*.midi");
+    auto safe = juce::Component::SafePointer<GgdDrumEditor>(this);
+    chooser->launchAsync(juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles
+                             | juce::FileBrowserComponent::warnAboutOverwriting,
+                         [safe, snapshot, kit](const juce::FileChooser& fc)
+                         {
+                             auto* self = safe.getComponent();
+                             if (self == nullptr)
+                                 return;
+                             const auto file = fc.getResult();
+                             if (file == juce::File())
+                                 return;
+                             const auto result = GgdMidiExporter::writeFile(file, snapshot, kit);
+                             if (!result.ok)
+                             {
+                                 self->showAlert("MIDI export failed", result.error);
+                                 return;
+                             }
+                             self->showStatus(result.summary() + ". Probability stays in Stochas GGD.");
+                         });
+}
+
+void GgdDrumEditor::beginMidiDrag(juce::Component* source)
+{
+    const auto* map = activeMap();
+    if (source == nullptr || map == nullptr)
+        return;
+
+    if (currentPattern().getEventCount() == 0)
+    {
+        showStatus("This pattern is empty: there is nothing to drag yet");
+        return;
+    }
+
+    const auto folder = juce::File::getSpecialLocation(juce::File::tempDirectory).getChildFile("Stochas GGD MIDI Drag");
+    if (folder.createDirectory().failed())
+    {
+        showStatus("Could not create a temporary folder for the MIDI file");
+        return;
+    }
+
+    if (dragTempFile.existsAsFile())
+        dragTempFile.deleteFile();
+
+    // A readable file name: DAWs name the dropped clip after it.
+    auto file = folder.getChildFile(currentPatternFileName() + ".mid");
+    if (file.exists() && !file.deleteFile())
+        file = folder.getNonexistentChildFile(currentPatternFileName(), ".mid", false);
+
+    const auto snapshot = GgdPatternFile::capture(layer(), project, currentSlot());
+    const auto result = GgdMidiExporter::writeFile(file, snapshot, *map);
+    if (!result.ok)
+    {
+        showStatus("MIDI drag failed: " + result.error);
+        file.deleteFile();
+        return;
+    }
+
+    dragTempFile = file;
+    auto safe = juce::Component::SafePointer<GgdDrumEditor>(this);
+    const bool started = juce::DragAndDropContainer::performExternalDragDropOfFiles(
+        { file.getFullPathName() }, false, source,
+        [safe, file]
+        {
+            // Some hosts read the file after the drop returns; give them a
+            // moment before cleaning up.
+            juce::Timer::callAfterDelay(30000, [file] { file.deleteFile(); });
+            if (auto* self = safe.getComponent())
+                self->dragTempFile = juce::File();
+        });
+
+    if (!started)
+    {
+        file.deleteFile();
+        dragTempFile = juce::File();
+        showStatus("The DAW did not accept a file drag. Use Pattern > Export MIDI file instead.");
+        return;
+    }
+    showStatus("Drop the clip onto a track");
+}
+
+void GgdDrumEditor::showAlert(const juce::String& title, const juce::String& message)
+{
+    juce::AlertWindow::showAsync(juce::MessageBoxOptions()
+                                     .withIconType(juce::MessageBoxIconType::WarningIcon)
+                                     .withTitle(title)
+                                     .withMessage(message)
+                                     .withButton("OK")
+                                     .withAssociatedComponent(this),
+                                 nullptr);
+}
+
+void GgdDrumEditor::updateBrowserHighlight()
+{
+    if (browser == nullptr)
+        return;
+    const auto& slotHistory = history[static_cast<size_t>(currentSlot())];
+    if (slotHistory.source == juce::File())
+        browser->clearLoaded();
+    else if (slotHistory.sourceIsPattern)
+        browser->setLoadedPattern(slotHistory.source);
+    else
+        browser->setLoadedGroove(slotHistory.source);
+}
+
+//==============================================================================
+void GgdDrumEditor::openSettings()
+{
+    if (settingsPanel != nullptr)
+    {
+        if (settingsPanel->isShowing())
+            settingsPanel->grabKeyboardFocus();
+        return;
+    }
+
+    auto safe = juce::Component::SafePointer<GgdDrumEditor>(this);
+    settingsPanel = std::make_unique<GgdSettingsPanel>(
+        prefs,
+        [safe](const GgdPreferences& next)
+        {
+            if (auto* self = safe.getComponent())
+            {
+                auto merged = next;
+                // The sheet does not own layout choices.
+                merged.zoom = self->prefs.zoom;
+                merged.gridTicks = self->prefs.gridTicks;
+                merged.showLibrary = self->prefs.showLibrary;
+                merged.editorWidth = self->prefs.editorWidth;
+                merged.editorHeight = self->prefs.editorHeight;
+                self->applyPreferences(merged, true);
+                if (self->settingsPanel != nullptr)
+                    self->settingsPanel->repaint();
+            }
+        },
+        [safe]
+        {
+            // Close after the click that requested it has been delivered.
+            juce::MessageManager::callAsync([safe]
+            {
+                if (auto* self = safe.getComponent())
+                    self->closeSettings();
+            });
+        });
+
+    addAndMakeVisible(*settingsPanel);
+    settingsPanel->sendLookAndFeelChange();
+    settingsPanel->setBounds(getLocalBounds());
+    settingsPanel->toFront(true);
+    if (settingsPanel->isShowing())
+        settingsPanel->grabKeyboardFocus();
+}
+
+void GgdDrumEditor::closeSettings()
+{
+    if (settingsPanel == nullptr)
+        return;
+    settingsPanel.reset();
+    focusGrid();
+}
+
+void GgdDrumEditor::focusGrid()
+{
+    // Only a component that is on screen can take keyboard focus.
+    if (grid != nullptr && grid->isShowing() && settingsPanel == nullptr)
+        grid->grabKeyboardFocus();
+}
+
+void GgdDrumEditor::showStatus(const juce::String& text)
+{
+    statusText = text;
+    statusUntilMs = nowMs() + 5000.0;
+    repaint(contextArea);
+}
+
+//==============================================================================
+bool GgdDrumEditor::slotHasContent(int slot) const
+{
+    const auto* pattern = layer().getEventPattern(slot);
+    return (pattern != nullptr && pattern->getEventCount() > 0) || !isDefaultName(nameOf(layer(), slot));
+}
+
+juce::String GgdDrumEditor::slotTooltip(int slot) const
+{
+    const auto* pattern = layer().getEventPattern(slot);
+    juce::String tip;
+    tip << "Slot " << (slot + 1) << ": " << displayName(layer(), slot);
+    if (pattern != nullptr)
+    {
+        tip << "\n" << pattern->getNumerator() << "/" << pattern->getDenominator() << ", "
+            << plural(pattern->getBars(), "bar", "bars") << ", " << plural(pattern->getEventCount(), "hit", "hits");
+    }
+    tip << "\nRight-click for slot actions";
+    return tip;
+}
+
+void GgdDrumEditor::refreshAll()
+{
+    refreshHeader();
+    refreshSlots();
+    refreshHistoryButtons();
+    refreshContextStrip();
+    refreshZoomControls();
+}
+
+void GgdDrumEditor::refreshHeader()
+{
+    const auto& pattern = currentPattern();
+    const int slot = currentSlot();
+
+    if (!patternName.hasKeyboardFocus(true))
+    {
+        const auto name = nameOf(layer(), slot);
+        patternName.setText(isDefaultName(name) ? juce::String() : name, false);
+    }
+    patternName.setTextToShowWhenEmpty("Pattern " + juce::String(slot + 1) + " (click to name)",
+                                       tc(GgdThemeRole::faint));
+
+    numeratorBox.setSelectedId(pattern.getNumerator(), juce::dontSendNotification);
+    denominatorBox.setSelectedId(pattern.getDenominator(), juce::dontSendNotification);
+    barsStepper->setValue(pattern.getBars(), GgdPatternOps::maxBarsFor(pattern.getNumerator(), pattern.getDenominator()));
+
+    const auto& parked = history[static_cast<size_t>(slot)].parked;
+    const bool showParked = !parked.empty();
+    if (showParked)
+    {
+        parkedButton.setButtonText(juce::String(static_cast<int>(parked.size())) + " hidden");
+        parkedButton.setTooltip(plural(static_cast<int>(parked.size()), "hit sits", "hits sit")
+                                + " outside the current meter or bar count. They come back if the pattern "
+                                  "grows again. Click to discard them.");
+    }
+    if (parkedButton.isVisible() != showParked)
+    {
+        parkedButton.setVisible(showParked);
+        resized();
+    }
+
+    for (int i = 0; i < static_cast<int>(std::size(gridChoices)); ++i)
+        if (gridChoices[i].ticks == prefs.gridTicks)
+            gridBox.setSelectedId(i + 1, juce::dontSendNotification);
+
+    kitBox.setSelectedId(project.getActiveMapIndex(ui()) + 1, juce::dontSendNotification);
+    syncBox.setSelectedId(ui().getSyncMode() == GgdTimeline::SyncMode::free ? 2 : 1, juce::dontSendNotification);
+
+    const bool select = grid->getToolMode() == GgdDrumGrid::ToolMode::select;
+    drawButton.setToggleState(!select, juce::dontSendNotification);
+    selectButton.setToggleState(select, juce::dontSendNotification);
+
+    // On is the normal state and stays calm; Off is the one to notice.
+    const bool enabled = !layer().getMuted();
+    outputButton.setToggleState(!enabled, juce::dontSendNotification);
+    outputButton.setButtonText(enabled ? "Seq On" : "Seq Off");
+    outputButton.setStyle(enabled ? GgdButton::Style::normal : GgdButton::Style::danger);
+
+    libraryButton.setToggleState(prefs.showLibrary, juce::dontSendNotification);
+}
+
+void GgdDrumEditor::refreshSlots()
+{
+    for (int i = 0; i < SEQ_MAX_PATTERNS; ++i)
+        slotStrip->setSlotTooltip(i, slotTooltip(i));
+    std::array<bool, SEQ_MAX_PATTERNS> content {};
+    for (int i = 0; i < SEQ_MAX_PATTERNS; ++i)
+        content[static_cast<size_t>(i)] = slotHasContent(i);
+    slotStrip->setState(currentSlot(), playingSlot, content);
+}
+
+void GgdDrumEditor::refreshHistoryButtons()
+{
+    const auto& slotHistory = history[static_cast<size_t>(currentSlot())];
+    undoButton.setEnabled(!slotHistory.undo.empty());
+    redoButton.setEnabled(!slotHistory.redo.empty());
+}
+
+void GgdDrumEditor::refreshZoomControls()
+{
+    const float zoom = grid->getZoomScale();
+    zoomSlider.setValue(zoom, juce::dontSendNotification);
+    zoomValueButton.setButtonText(juce::String(juce::roundToInt(zoom * 100.0f)) + "%");
+}
+
+void GgdDrumEditor::refreshContextStrip()
+{
+    const bool select = grid->getToolMode() == GgdDrumGrid::ToolMode::select;
+    const int count = grid->getSelectedCount();
+    const bool tools = select && count > 0;
+
+    const int probability = tools ? grid->getSelectedProbability() : -1;
+    for (size_t i = 0; i < chanceButtons.size(); ++i)
+        chanceButtons[i].setToggleState(probability == chanceValues[i], juce::dontSendNotification);
+
+    const bool wasShowingTools = deleteButton.isVisible();
+    if (wasShowingTools != tools)
+        layoutContextStrip();
+    repaint(contextArea);
+}
+
+void GgdDrumEditor::layoutContextStrip()
+{
+    const bool tools = grid->getToolMode() == GgdDrumGrid::ToolMode::select && grid->getSelectedCount() > 0;
+    auto strip = contextArea.reduced(14, 10);
+
+    std::vector<juce::Component*> all { &ghostButton, &accentButton, &quantizeButton, &humanizeButton,
+                                        &flamButton, &doubleButton, &moreButton, &deleteButton };
+    for (auto& button : chanceButtons)
+        all.push_back(&button);
+
+    if (!tools)
+    {
+        for (auto* component : all)
+            component->setVisible(false);
+        selectionInfoArea = {};
+        hintArea = strip;
+        return;
+    }
+
+    // Wide enough for everything? Otherwise Flam/Double and Humanize live
+    // in the More menu only.
+    const int full = 150 + 122 + 184 + 166 + 122 + 84 + 76 + 6 * 12;
+    const bool showFlam = strip.getWidth() >= full;
+    const bool showHumanize = strip.getWidth() >= full - 134;
+
+    selectionInfoArea = strip.removeFromLeft(140);
+    strip.removeFromLeft(10);
+
+    auto place = [&strip](juce::Component& component, int width)
+    {
+        component.setBounds(strip.removeFromLeft(width));
+        component.setVisible(true);
+    };
+
+    place(ghostButton, 58);
+    place(accentButton, 64);
+    strip.removeFromLeft(12);
+    for (auto& button : chanceButtons)
+        place(button, 46);
+    strip.removeFromLeft(12);
+    place(quantizeButton, showHumanize ? 80 : 86);
+    quantizeButton.setSegment(false, showHumanize);
+    if (showHumanize)
+        place(humanizeButton, 86);
+    else
+        humanizeButton.setVisible(false);
+    strip.removeFromLeft(12);
+    if (showFlam)
+    {
+        place(flamButton, 56);
+        place(doubleButton, 66);
+        strip.removeFromLeft(12);
+    }
+    else
+    {
+        flamButton.setVisible(false);
+        doubleButton.setVisible(false);
+    }
+    place(moreButton, 84);
+    strip.removeFromLeft(12);
+    place(deleteButton, 76);
+    strip.removeFromLeft(14);
+    hintArea = strip;
+}
+
+void GgdDrumEditor::layoutViewport()
+{
+    grid->setViewportSize(viewport.getWidth(), viewport.getHeight(), viewport.getScrollBarThickness());
+}
+
+//==============================================================================
+void GgdDrumEditor::resized()
+{
+    auto bounds = getLocalBounds();
+    auto header = bounds.removeFromTop(headerHeight);
+    auto row1 = header.removeFromTop(row1Height).reduced(14, 9);
+    auto row2 = header.reduced(14, 8);
+
+    // row 1: identity and pattern ------------------------------------------------
+    brandArea = row1.removeFromLeft(168);
+    row1.removeFromLeft(6);
+    slotStrip->setBounds(row1.removeFromLeft(8 * 31));
+    row1.removeFromLeft(10);
+
+    settingsButton.setBounds(row1.removeFromRight(34));
+    row1.removeFromRight(4);
+    libraryButton.setBounds(row1.removeFromRight(34));
+    row1.removeFromRight(12);
+    dragButton->setBounds(row1.removeFromRight(112));
+    row1.removeFromRight(8);
+    outputButton.setBounds(row1.removeFromRight(94));
+    row1.removeFromRight(12);
+    transport->setBounds(row1.removeFromRight(juce::jlimit(150, 220, row1.getWidth() - 380)));
+    row1.removeFromRight(12);
+
+    const int nameWidth = juce::jlimit(150, 300, row1.getWidth() - 106);
+    patternName.setBounds(row1.removeFromLeft(nameWidth));
+    row1.removeFromLeft(6);
+    patternMenuButton.setBounds(row1.removeFromLeft(100));
+
+    // row 2: editing tools ------------------------------------------------------
+    drawButton.setBounds(row2.removeFromLeft(74));
+    selectButton.setBounds(row2.removeFromLeft(80));
+    row2.removeFromLeft(10);
+    undoButton.setBounds(row2.removeFromLeft(36));
+    redoButton.setBounds(row2.removeFromLeft(36));
+    row2.removeFromLeft(18);
+
+    numeratorBox.setBounds(row2.removeFromLeft(56));
+    meterSlashArea = row2.removeFromLeft(16);
+    denominatorBox.setBounds(row2.removeFromLeft(56));
+    row2.removeFromLeft(10);
+    barsStepper->setBounds(row2.removeFromLeft(124));
+    if (parkedButton.isVisible())
+    {
+        row2.removeFromLeft(4);
+        parkedButton.setBounds(row2.removeFromLeft(112));
+    }
+    row2.removeFromLeft(14);
+    gridBox.setBounds(row2.removeFromLeft(108));
+
+    syncBox.setBounds(row2.removeFromRight(150));
+    row2.removeFromRight(8);
+    kitBox.setBounds(row2.removeFromRight(juce::jlimit(140, 190, row2.getWidth() - 260)));
+    row2.removeFromRight(18);
+
+    row2.removeFromLeft(16);
+    auto zoom = row2.removeFromLeft(juce::jmin(row2.getWidth(), 250));
+    fitButton.setBounds(zoom.removeFromRight(32));
+    zoom.removeFromRight(2);
+    zoomValueButton.setBounds(zoom.removeFromRight(56));
+    zoom.removeFromRight(2);
+    zoomSlider.setBounds(zoom);
+
+    // body -------------------------------------------------------------------
+    if (prefs.showLibrary && browser != nullptr)
+    {
+        const int browserWidth = juce::jlimit(270, 340, getWidth() / 5);
+        browser->setBounds(bounds.removeFromRight(browserWidth));
+    }
+    contextArea = bounds.removeFromBottom(contextHeight);
+    viewport.setBounds(bounds);
+    layoutViewport();
+    layoutContextStrip();
+
+    if (settingsPanel != nullptr)
+        settingsPanel->setBounds(getLocalBounds());
+
+    if (prefs.editorWidth != getWidth() || prefs.editorHeight != getHeight())
+    {
+        prefs.editorWidth = getWidth();
+        prefs.editorHeight = getHeight();
+        if (isShowing())
+            preferenceStore->save(prefs);
+    }
 }
 
 bool GgdDrumEditor::keyPressed(const juce::KeyPress& key)
 {
-    if (isUndoKey(key))
-    {
-        performUndo();
-        return true;
-    }
+    // Keys that reach the editor itself (focus on a button, for example)
+    // still drive the timeline.
+    if (settingsPanel == nullptr && grid != nullptr)
+        return grid->keyPressed(key);
     return false;
 }
 
-void GgdDrumEditor::configureLookAndFeel()
-{
-    lookAndFeel.setColour(juce::ComboBox::backgroundColourId, c(panel2));
-    lookAndFeel.setColour(juce::ComboBox::textColourId, c(text));
-    lookAndFeel.setColour(juce::ComboBox::outlineColourId, c(border));
-    lookAndFeel.setColour(juce::ComboBox::arrowColourId, c(muted));
-    lookAndFeel.setColour(juce::PopupMenu::backgroundColourId, c(panel2));
-    lookAndFeel.setColour(juce::PopupMenu::textColourId, c(text));
-    lookAndFeel.setColour(juce::PopupMenu::highlightedBackgroundColourId, c(accent2));
-    lookAndFeel.setColour(juce::PopupMenu::highlightedTextColourId, c(text));
-    lookAndFeel.setColour(juce::TextEditor::backgroundColourId, c(panel2));
-    lookAndFeel.setColour(juce::TextEditor::textColourId, c(text));
-    lookAndFeel.setColour(juce::TextEditor::outlineColourId, c(border));
-    lookAndFeel.setColour(juce::TextEditor::focusedOutlineColourId, c(accent2));
-    lookAndFeel.setColour(juce::TextButton::buttonColourId, c(panel2));
-    lookAndFeel.setColour(juce::TextButton::buttonOnColourId, c(accent2));
-    lookAndFeel.setColour(juce::TextButton::textColourOffId, c(text));
-    lookAndFeel.setColour(juce::TextButton::textColourOnId, c(text));
-    lookAndFeel.setColour(juce::ScrollBar::thumbColourId, c(border).brighter(0.32f));
-    lookAndFeel.setColour(juce::ScrollBar::trackColourId, c(bg));
-}
-
+//==============================================================================
 void GgdDrumEditor::paint(juce::Graphics& g)
 {
-    g.fillAll(c(bg));
+    g.fillAll(tc(GgdThemeRole::background));
+    paintHeader(g);
 
-    g.setColour(c(panel));
-    g.fillRect(0, 0, getWidth(), topAreaHeight);
-    g.setColour(c(border));
-    g.drawHorizontalLine(topAreaHeight - 1, 0.0f, static_cast<float>(getWidth()));
+    g.setColour(tc(GgdThemeRole::outside));
+    g.fillRect(viewport.getBounds());
 
-    g.setColour(c(panel));
-    g.fillRect(0, getHeight() - bottomAreaHeight, getWidth(), bottomAreaHeight);
-    g.setColour(c(border));
-    g.drawHorizontalLine(getHeight() - bottomAreaHeight, 0.0f,
-                         static_cast<float>(getWidth()));
-}
+    paintContextStrip(g);
 
-void GgdDrumEditor::resized()
-{
-    const int pad = 12;
-
-    auto first = juce::Rectangle<int>(
-        pad, 7, getWidth() - pad * 2, 43);
-
-    productLabel.setBounds(first.removeFromLeft(146));
-    transportStatus.setBounds(first.removeFromLeft(82));
-    first.removeFromLeft(6);
-
-    kitSelector.setBounds(first.removeFromLeft(218).reduced(0, 5));
-    first.removeFromLeft(7);
-    patternSelector.setBounds(first.removeFromLeft(124).reduced(0, 5));
-    first.removeFromLeft(7);
-
-    clearButton.setBounds(first.removeFromRight(58).reduced(0, 5));
-    first.removeFromRight(5);
-    duplicateButton.setBounds(first.removeFromRight(76).reduced(0, 5));
-    first.removeFromRight(5);
-    undoButton.setBounds(first.removeFromRight(58).reduced(0, 5));
-    first.removeFromRight(7);
-    patternName.setBounds(first.reduced(0, 5));
-
-    auto second = juce::Rectangle<int>(
-        pad, 54, getWidth() - pad * 2, 43);
-
-    meterLabel.setBounds(second.removeFromLeft(48));
-    numeratorSelector.setBounds(second.removeFromLeft(58).reduced(0, 5));
-    meterSlash.setBounds(second.removeFromLeft(20));
-    denominatorSelector.setBounds(second.removeFromLeft(68).reduced(0, 5));
-    second.removeFromLeft(16);
-
-    barsLabel.setBounds(second.removeFromLeft(52));
-    barsSelector.setBounds(second.removeFromLeft(98).reduced(0, 5));
-
-    gridViewport.setBounds(
-        0, topAreaHeight, getWidth(),
-        getHeight() - topAreaHeight - bottomAreaHeight);
-    hintLabel.setBounds(
-        14, getHeight() - bottomAreaHeight + 1,
-        getWidth() - 28, bottomAreaHeight - 2);
-}
-
-void GgdDrumEditor::timerCallback()
-{
-    const int pos = processor.mNotifier.getPlayPosition(0);
-    grid->setPlayPosition(pos);
-
-    if (pos >= 0)
+    if (browser != nullptr && browser->isVisible())
     {
-        transportStatus.setColour(juce::Label::textColourId, c(accent));
-        transportStatus.setText("PLAY  " + juce::String(pos + 1),
-                                juce::dontSendNotification);
-    }
-    else
-    {
-        transportStatus.setColour(juce::Label::textColourId, c(muted));
-        transportStatus.setText("Ready", juce::dontSendNotification);
-    }
-
-    if (processor.mNotifier.doesUINeedUpdate())
-    {
-        refreshControlsFromModel();
-        grid->refreshSize();
+        g.setColour(tc(GgdThemeRole::border));
+        g.fillRect(browser->getX() - 1, browser->getY(), 1, browser->getHeight());
     }
 }
 
-void GgdDrumEditor::initialiseDrumState()
+void GgdDrumEditor::paintHeader(juce::Graphics& g)
 {
-    if (maps.isEmpty() || canonicalRows.isEmpty())
+    const auto header = getLocalBounds().removeFromTop(headerHeight);
+    juce::ColourGradient fill(tc(GgdThemeRole::panelRaised), 0.0f, 0.0f, tc(GgdThemeRole::panel), 0.0f,
+                              static_cast<float>(row1Height), false);
+    g.setGradientFill(fill);
+    g.fillRect(header.withHeight(row1Height));
+    g.setColour(tc(GgdThemeRole::panel));
+    g.fillRect(header.withTrimmedTop(row1Height));
+
+    g.setColour(tc(GgdThemeRole::borderSoft));
+    g.fillRect(14, row1Height, getWidth() - 28, 1);
+    g.setColour(tc(GgdThemeRole::border));
+    g.fillRect(0, headerHeight - 1, getWidth(), 1);
+
+    // brand: a small mark (three hits on a lane) and the product name
+    auto brand = brandArea;
+    auto mark = brand.removeFromLeft(30).withSizeKeepingCentre(30, 30).toFloat();
+    juce::ColourGradient markFill(tc(GgdThemeRole::accent), mark.getX(), mark.getY(),
+                                  tc(GgdThemeRole::accentSecondary), mark.getRight(), mark.getBottom(), false);
+    g.setGradientFill(markFill);
+    g.fillRoundedRectangle(mark, 8.0f);
+    const auto ink = tc(GgdThemeRole::accentText);
+    g.setColour(ink);
+    const float barWidth = 4.0f;
+    const float heights[] = { 14.0f, 8.0f, 18.0f };
+    for (int i = 0; i < 3; ++i)
+    {
+        const float x = mark.getX() + 7.5f + i * 6.0f;
+        g.fillRoundedRectangle(x, mark.getBottom() - 6.0f - heights[i], barWidth, heights[i], 1.6f);
+    }
+
+    brand.removeFromLeft(10);
+    auto title = brand.withTrimmedBottom(14).toFloat();
+    g.setColour(tc(GgdThemeRole::text));
+    g.setFont(GgdFonts::bold(15.0f));
+    g.drawText("Stochas", title.withTrimmedTop(2.0f), juce::Justification::bottomLeft, false);
+    const float stochasWidth = juce::GlyphArrangement::getStringWidth(g.getCurrentFont(), "Stochas ");
+    g.setColour(tc(GgdThemeRole::accent));
+    g.drawText("GGD", title.withTrimmedTop(2.0f).withTrimmedLeft(stochasWidth), juce::Justification::bottomLeft,
+               false);
+    g.setColour(tc(GgdThemeRole::faint));
+    g.setFont(GgdFonts::medium(10.5f));
+    g.drawText(juce::String("Drum sequencer  v") + JucePlugin_VersionString,
+               brand.withTrimmedTop(brand.getHeight() - 14), juce::Justification::topLeft, false);
+
+    // meter slash
+    g.setColour(tc(GgdThemeRole::muted));
+    g.setFont(GgdFonts::medium(14.0f));
+    g.drawText("/", meterSlashArea, juce::Justification::centred, false);
+}
+
+void GgdDrumEditor::paintContextStrip(juce::Graphics& g)
+{
+    if (contextArea.isEmpty())
         return;
 
-    auto* seq = processor.mData.getUISeqData();
-    auto* layer = seq->getLayer(0);
-    const juce::String oldLayerName(layer->getLayerName());
-    const bool legacyConfigured = oldLayerName.startsWith("GGD:");
-    const bool configuredV2 = oldLayerName.startsWith("GGD2:");
-    const bool configuredV3 = oldLayerName.startsWith("GGD3:");
-    const bool alreadyConfigured =
-        legacyConfigured || configuredV2 || configuredV3;
+    g.setColour(tc(GgdThemeRole::panel));
+    g.fillRect(contextArea);
+    g.setColour(tc(GgdThemeRole::border));
+    g.fillRect(contextArea.getX(), contextArea.getY(), contextArea.getWidth(), 1);
 
-    int preservedBars = 1;
+    const bool select = grid->getToolMode() == GgdDrumGrid::ToolMode::select;
+    const int count = grid->getSelectedCount();
 
-    if (!alreadyConfigured)
+    if (!selectionInfoArea.isEmpty())
     {
-        seq->clearLayer(0);
-        layer = seq->getLayer(0);
-        layer->setNumSteps(16);
-        layer->setMidiChannel(1);
-        layer->setCurrentPattern(0);
+        auto info = selectionInfoArea.toFloat();
+        g.setColour(tc(GgdThemeRole::text));
+        g.setFont(GgdFonts::semibold(13.0f));
+        g.drawText(plural(count, "hit", "hits"), info.removeFromTop(info.getHeight() * 0.55f),
+                   juce::Justification::bottomLeft, false);
 
-        for (int i = 1; i < SEQ_MAX_LAYERS; ++i)
-            seq->getLayer(i)->setMuted(true);
-    }
-    else
-    {
-        if (legacyConfigured)
-            migrateLegacyGgdRows(layer, canonicalRows.size());
-
-        if (configuredV3)
-            parseMeterFromLayerName(oldLayerName, timeSigNumerator,
-                                    timeSigDenominator);
-
-        const int oldStepsPerBar =
-            stepsPerBarForMeter(timeSigNumerator, timeSigDenominator);
-        preservedBars = juce::jlimit(
-            1, maxUserBars,
-            juce::jmax(1, (layer->getNumSteps() + oldStepsPerBar - 1)
-                              / oldStepsPerBar));
+        const int velocity = grid->getSelectedVelocity();
+        const int probability = grid->getSelectedProbability();
+        juce::String detail = "vel " + juce::String(velocity);
+        detail << "  |  " << (probability >= 0 ? juce::String(probability) + "%" : juce::String("mixed chance"));
+        g.setColour(tc(GgdThemeRole::muted));
+        g.setFont(GgdFonts::regular(11.5f));
+        g.drawText(detail, info, juce::Justification::topLeft, false);
     }
 
-    activeBars = preservedBars;
-    activeMapIndex = alreadyConfigured ? mapIndexFromLayerName(oldLayerName) : 0;
-    activeMapIndex = juce::jlimit(0, maps.size() - 1, activeMapIndex);
-
-    seq->setMidiPassthru(SEQ_MIDI_PASSTHRU_ALL);
-    seq->setMidiRespond(SEQ_MIDI_RESPOND_NO);
-
-    layer->setNoteSource(true);
-    layer->setMonoMode(false);
-    layer->setMaxRows(activeStorageRowCount(canonicalRows.size()));
-    layer->setMaxPoly(juce::jmin(SEQ_DEFAULT_MAX_POLY, layer->getMaxRows()));
-
-    applyPatternGeometry(false);
-    applyActiveMapBindings(false);
-    publishModelChange();
-}
-
-void GgdDrumEditor::applyActiveMapBindings(bool publish)
-{
-    if (maps.isEmpty())
+    auto area = hintArea.toFloat();
+    if (area.getWidth() < 40.0f)
         return;
 
-    auto* layer = processor.mData.getUISeqData()->getLayer(0);
-    const auto& map = maps.getReference(activeMapIndex);
-
-    const int rowCount = activeStorageRowCount(canonicalRows.size());
-    const int semanticCount = juce::jmin(canonicalRows.size(), rowCount);
-    layer->setMaxRows(rowCount);
-    layer->setNoteSource(true);
-
-    for (int canonicalRow = 0; canonicalRow < semanticCount; ++canonicalRow)
+    if (statusText.isNotEmpty())
     {
-        const int storageRow =
-            storageRowForCanonical(canonicalRow, canonicalRows.size());
-        const auto& canonical = canonicalRows.getReference(canonicalRow);
-        const auto* articulation = map.findArticulation(canonical.semanticId);
-        const auto* binding =
-            articulation != nullptr ? articulation->primaryNoteBinding() : nullptr;
-
-        const int midi = binding != nullptr ? binding->midi : SEQ_NOTE_OFF;
-        layer->setNote(storageRow, static_cast<int8_t>(midi), true);
-
-        const auto displayName =
-            (articulation != nullptr ? articulation->label : canonical.defaultLabel)
-                .substring(0, SEQ_MAX_NOTELABEL_LEN - 1);
-        layer->setNoteName(storageRow, displayName.toRawUTF8());
+        auto line = area;
+        g.setColour(tc(GgdThemeRole::accent));
+        g.fillEllipse(juce::Rectangle<float>(6.0f, 6.0f).withCentre({ line.getX() + 4.0f, line.getCentreY() }));
+        line.removeFromLeft(16.0f);
+        g.setColour(tc(GgdThemeRole::text));
+        g.setFont(GgdFonts::regular(12.5f));
+        g.drawFittedText(statusText, line.toNearestInt(), juce::Justification::centredLeft, 1, 0.9f);
+        return;
     }
 
-    updatePersistenceTag();
-
-    if (publish)
-        publishModelChange();
-}
-
-void GgdDrumEditor::applyPatternGeometry(bool publish)
-{
-    if (maps.isEmpty())
-        return;
-
-    timeSigNumerator = juce::jlimit(1, 16, timeSigNumerator);
-    if (timeSigDenominator != 4
-        && timeSigDenominator != 8
-        && timeSigDenominator != 16)
-        timeSigDenominator = 4;
-
-    const int stepsPerBar =
-        stepsPerBarForMeter(timeSigNumerator, timeSigDenominator);
-    const int maxBars =
-        juce::jlimit(1, maxUserBars, SEQ_MAX_STEPS / stepsPerBar);
-    activeBars = juce::jlimit(1, maxBars, activeBars);
-
-    auto* layer = processor.mData.getUISeqData()->getLayer(0);
-    layer->setStepsPerMeasure(timeSigNumerator);
-    layer->setClockDivider(clockDividerForMeter(timeSigDenominator));
-    layer->setNumSteps(activeBars * stepsPerBar);
-    updatePersistenceTag();
-
-    rebuildBarsSelector();
-    if (grid != nullptr)
+    struct Hint
     {
-        grid->setMeter(timeSigNumerator, timeSigDenominator);
-        grid->refreshSize();
+        const char* key;
+        const char* label;
+    };
+    static const Hint drawHints[] = { { "Click", "add" }, { "Drag", "paint" }, { "Right-drag", "erase" },
+                                      { "Shift-drag", "velocity" }, { "Alt-drag", "timing" },
+                                      { "Ctrl+Wheel", "zoom" } };
+    static const Hint selectHints[] = { { "Drag", "select" }, { "Shift", "add" }, { "Ctrl+A", "all" },
+                                        { "Ctrl+V", "paste" }, { "Esc", "deselect" } };
+    static const Hint toolHints[] = { { "Drag", "move" }, { "Alt-drag", "copy" }, { "Arrows", "nudge" },
+                                      { "Shift-drag", "velocity" } };
+
+    const Hint* hints = drawHints;
+    size_t hintCount = std::size(drawHints);
+    if (select && count > 0)
+    {
+        hints = toolHints;
+        hintCount = std::size(toolHints);
+    }
+    else if (select)
+    {
+        hints = selectHints;
+        hintCount = std::size(selectHints);
     }
 
-    if (publish)
-        publishModelChange();
-}
-
-void GgdDrumEditor::refreshControlsFromModel()
-{
-    if (maps.isEmpty())
-        return;
-
-    auto* layer = processor.mData.getUISeqData()->getLayer(0);
-    const juce::String layerName(layer->getLayerName());
-
-    const int mapFromState = mapIndexFromLayerName(layerName);
-    if (mapFromState >= 0 && mapFromState < maps.size())
-        activeMapIndex = mapFromState;
-
-    parseMeterFromLayerName(layerName, timeSigNumerator, timeSigDenominator);
-
-    const int stepsPerBar =
-        stepsPerBarForMeter(timeSigNumerator, timeSigDenominator);
-    const int maxBars =
-        juce::jlimit(1, maxUserBars, SEQ_MAX_STEPS / stepsPerBar);
-    activeBars = juce::jlimit(
-        1, maxBars,
-        juce::jmax(1, (layer->getNumSteps() + stepsPerBar - 1) / stepsPerBar));
-
-    kitSelector.setSelectedId(activeMapIndex + 1, juce::dontSendNotification);
-    patternSelector.setSelectedId(layer->getCurrentPattern() + 1,
-                                  juce::dontSendNotification);
-    patternName.setText(layer->getPatternName(), false);
-    numeratorSelector.setSelectedId(timeSigNumerator, juce::dontSendNotification);
-
-    const int denominatorId =
-        timeSigDenominator == 4 ? 1 : timeSigDenominator == 8 ? 2 : 3;
-    denominatorSelector.setSelectedId(denominatorId, juce::dontSendNotification);
-
-    rebuildBarsSelector();
-    barsSelector.setSelectedId(activeBars, juce::dontSendNotification);
-    refreshPatternSelectorLabels();
-
-    grid->setMeter(timeSigNumerator, timeSigDenominator);
-    grid->setMap(&maps.getReference(activeMapIndex));
-}
-
-void GgdDrumEditor::rebuildBarsSelector()
-{
-    const int stepsPerBar =
-        stepsPerBarForMeter(timeSigNumerator, timeSigDenominator);
-    const int maxBars =
-        juce::jlimit(1, maxUserBars, SEQ_MAX_STEPS / stepsPerBar);
-
-    barsSelector.clear(juce::dontSendNotification);
-    for (int bars = 1; bars <= maxBars; ++bars)
-        barsSelector.addItem(
-            juce::String(bars) + (bars == 1 ? " bar" : " bars"), bars);
-
-    barsSelector.setSelectedId(
-        juce::jlimit(1, maxBars, activeBars), juce::dontSendNotification);
-}
-
-void GgdDrumEditor::refreshPatternSelectorLabels()
-{
-    auto* layer = processor.mData.getUISeqData()->getLayer(0);
-
-    for (int i = 0; i < SEQ_MAX_PATTERNS; ++i)
+    const bool mac = (juce::SystemStats::getOperatingSystemType() & juce::SystemStats::MacOSX) != 0;
+    const auto keyFont = GgdFonts::semibold(11.0f);
+    const auto labelFont = GgdFonts::regular(12.0f);
+    float x = area.getX();
+    for (size_t i = 0; i < hintCount; ++i)
     {
-        const juce::String name(layer->getPatternName(i));
-        const bool custom =
-            name.isNotEmpty() && name != juce::String(SEQ_DEFAULT_PAT_NAME);
-        patternSelector.changeItemText(
-            i + 1,
-            custom ? juce::String(i + 1) + ": " + name
-                   : "Pattern " + juce::String(i + 1));
+        auto key = juce::String(hints[i].key);
+        if (mac)
+            key = key.replace("Ctrl", "Cmd").replace("Alt", "Opt");
+        const juce::String label(hints[i].label);
+        const float keyWidth = juce::GlyphArrangement::getStringWidth(keyFont, key) + 14.0f;
+        const float labelWidth = juce::GlyphArrangement::getStringWidth(labelFont, label);
+        if (x + keyWidth + 6.0f + labelWidth > area.getRight())
+            break;
+
+        const juce::Rectangle<float> cap(x, area.getCentreY() - 10.0f, keyWidth, 20.0f);
+        g.setColour(tc(GgdThemeRole::panelRaised));
+        g.fillRoundedRectangle(cap, 4.0f);
+        g.setColour(tc(GgdThemeRole::border));
+        g.drawRoundedRectangle(cap.reduced(0.5f), 4.0f, 1.0f);
+        g.setColour(tc(GgdThemeRole::text).withAlpha(0.85f));
+        g.setFont(keyFont);
+        g.drawText(key, cap, juce::Justification::centred, false);
+
+        x = cap.getRight() + 6.0f;
+        g.setColour(tc(GgdThemeRole::muted));
+        g.setFont(labelFont);
+        g.drawText(label, juce::Rectangle<float>(x, area.getY(), labelWidth + 2.0f, area.getHeight()),
+                   juce::Justification::centredLeft, false);
+        x += labelWidth + 18.0f;
     }
-}
-
-void GgdDrumEditor::setActiveMap(int index)
-{
-    if (index < 0 || index >= maps.size() || index == activeMapIndex)
-        return;
-
-    activeMapIndex = index;
-    applyActiveMapBindings(true);
-    grid->setMap(&maps.getReference(activeMapIndex));
-}
-
-void GgdDrumEditor::performUndo()
-{
-    processor.mData.undo();
-    processor.mIncomingData.addToFifo(SEQ_NOTIFY_HOST, 0, 0);
-    refreshControlsFromModel();
-    grid->refreshSize();
-}
-
-void GgdDrumEditor::duplicateCurrentPattern()
-{
-    auto* seq = processor.mData.getUISeqData();
-    auto* layer = seq->getLayer(0);
-
-    const int source = layer->getCurrentPattern();
-    const int target = (source + 1) % SEQ_MAX_PATTERNS;
-    const juce::String sourceName(layer->getPatternName(source));
-
-    seq->copyPatternData(0, target, 0, source);
-
-    juce::String copyName =
-        sourceName == juce::String(SEQ_DEFAULT_PAT_NAME)
-            ? "Pattern " + juce::String(target + 1)
-            : sourceName + " copy";
-    copyName = copyName.substring(0, SEQ_PATTERN_NAME_MAXLEN - 1);
-    layer->setPatternName(copyName.toRawUTF8(), target);
-    layer->setCurrentPattern(target);
-
-    publishModelChange();
-    refreshControlsFromModel();
-    grid->repaint();
-}
-
-void GgdDrumEditor::publishModelChange()
-{
-    processor.mData.swap();
-    processor.mIncomingData.addToFifo(SEQ_NOTIFY_HOST, 0, 0);
-}
-
-void GgdDrumEditor::clearCurrentPattern()
-{
-    auto* seq = processor.mData.getUISeqData();
-    auto* layer = seq->getLayer(0);
-    seq->clearPattern(0, layer->getCurrentPattern());
-    publishModelChange();
-    grid->repaint();
-}
-
-void GgdDrumEditor::updatePersistenceTag()
-{
-    if (maps.isEmpty())
-        return;
-
-    auto* layer = processor.mData.getUISeqData()->getLayer(0);
-    const auto tag =
-        "GGD3:" + mapPersistenceToken(maps.getReference(activeMapIndex))
-        + ":" + juce::String(timeSigNumerator)
-        + "/" + juce::String(timeSigDenominator);
-    layer->setLayerName(tag.toRawUTF8());
-}
-
-juce::String GgdDrumEditor::mapPersistenceToken(const GgdKitMap& map) const
-{
-    if (map.id.containsIgnoreCase(".pv."))
-        return "pv";
-    if (map.id.containsIgnoreCase(".piv."))
-        return "piv";
-    if (map.id.containsIgnoreCase("modern"))
-        return "mm";
-    return juce::String(activeMapIndex);
-}
-
-int GgdDrumEditor::mapIndexFromLayerName(const juce::String& layerName) const
-{
-    if (!layerName.startsWith("GGD:")
-        && !layerName.startsWith("GGD2:")
-        && !layerName.startsWith("GGD3:"))
-        return 0;
-
-    auto remainder = layerName.fromFirstOccurrenceOf(":", false, false);
-    const auto token = remainder.upToFirstOccurrenceOf(":", false, false).trim();
-
-    for (int i = 0; i < maps.size(); ++i)
-        if (mapPersistenceToken(maps.getReference(i)) == token)
-            return i;
-
-    return 0;
-}
-
-bool GgdDrumEditor::parseMeterFromLayerName(
-    const juce::String& layerName, int& numerator, int& denominator) const
-{
-    if (!layerName.startsWith("GGD3:"))
-        return false;
-
-    auto remainder = layerName.fromFirstOccurrenceOf(":", false, false);
-    remainder = remainder.fromFirstOccurrenceOf(":", false, false);
-    const auto numeratorText = remainder.upToFirstOccurrenceOf("/", false, false);
-    const auto denominatorText = remainder.fromFirstOccurrenceOf("/", false, false);
-
-    const int n = numeratorText.getIntValue();
-    const int d = denominatorText.getIntValue();
-
-    if (n < 1 || n > 16 || (d != 4 && d != 8 && d != 16))
-        return false;
-
-    numerator = n;
-    denominator = d;
-    return true;
 }

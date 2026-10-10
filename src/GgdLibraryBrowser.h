@@ -4,6 +4,9 @@
 #include <functional>
 #include <memory>
 
+// Library panel with two tabs: GGD MIDI grooves and saved Stochas GGD
+// patterns. Each tab browses one root folder (remembered on this computer)
+// as a tree, or as a flat list while the filter has text.
 class GgdLibraryBrowser : public juce::Component
 {
 public:
@@ -13,6 +16,7 @@ public:
     GgdLibraryBrowser();
     ~GgdLibraryBrowser() override;
 
+    void paint(juce::Graphics& g) override;
     void resized() override;
 
     void setGrooveOpenCallback(FileCallback callback);
@@ -27,13 +31,20 @@ public:
     void refresh();
     void themeChanged();
 
+    // 0 = grooves, 1 = patterns
+    void showTab(int index);
+    int getCurrentTab() const { return currentTab; }
+
 private:
     class BrowserPane;
+    class TabButton;
 
     std::unique_ptr<juce::PropertiesFile> settings;
     std::unique_ptr<BrowserPane> groovePane;
     std::unique_ptr<BrowserPane> patternPane;
-    juce::TabbedComponent tabs { juce::TabbedButtonBar::TabsAtTop };
+    std::unique_ptr<TabButton> grooveTab;
+    std::unique_ptr<TabButton> patternTab;
+    int currentTab = 0;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(GgdLibraryBrowser)
 };

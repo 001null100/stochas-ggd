@@ -1,243 +1,95 @@
 /***************************************************************
  ** Copyright (C) 2016 by Andrew Shakinovsky
  **
- ** You may also use this code under the terms of the 
+ ** You may also use this code under the terms of the
  ** GPL v3 (see www.gnu.org/licenses).
- ** STOCHAS IS PROVIDED "AS IS" WITHOUT ANY WARRANTY, AND ALL 
- ** WARRANTIES, WHETHER EXPRESSED OR IMPLIED, INCLUDING 
+ ** STOCHAS IS PROVIDED "AS IS" WITHOUT ANY WARRANTY, AND ALL
+ ** WARRANTIES, WHETHER EXPRESSED OR IMPLIED, INCLUDING
  ** MERCHANTABILITY AND FITNESS FOR PURPOSE, ARE DISCLAIMED.
  ***************************************************************/
 #include "SequenceData.h"
-#include "EditorState.h" // just for random seed function
+#include "Scale.h"
+
+#include <memory>
+#include <thread>
+
 SeqMidiMapItem gDefaultMidiMapItems[SEQMIDI_NUM_DEFAULT_ITEMS] =
 {
-   // action, target, value, note, channel
+   // action, target, value, type, note, channel
 
    // change patterns for all
    { SEQMIDI_ACTION_CHGPAT,    SEQMIDI_TARGET_ALL,  1, SEQ_MIDI_NOTEON, 0, 1 },
    { SEQMIDI_ACTION_CHGPAT,    SEQMIDI_TARGET_ALL,  2, SEQ_MIDI_NOTEON, 1, 1 },
-   { SEQMIDI_ACTION_CHGPAT,    SEQMIDI_TARGET_ALL,  3, SEQ_MIDI_NOTEON,2, 1 },
-   { SEQMIDI_ACTION_CHGPAT,    SEQMIDI_TARGET_ALL,  4, SEQ_MIDI_NOTEON,3, 1 },
-   { SEQMIDI_ACTION_CHGPAT,    SEQMIDI_TARGET_ALL,  5, SEQ_MIDI_NOTEON,4, 1 },
-   { SEQMIDI_ACTION_CHGPAT,    SEQMIDI_TARGET_ALL,  6, SEQ_MIDI_NOTEON,5, 1 },
-   { SEQMIDI_ACTION_CHGPAT,    SEQMIDI_TARGET_ALL,  7, SEQ_MIDI_NOTEON,6, 1 },
-   { SEQMIDI_ACTION_CHGPAT,    SEQMIDI_TARGET_ALL,  8, SEQ_MIDI_NOTEON,7, 1 },
+   { SEQMIDI_ACTION_CHGPAT,    SEQMIDI_TARGET_ALL,  3, SEQ_MIDI_NOTEON, 2, 1 },
+   { SEQMIDI_ACTION_CHGPAT,    SEQMIDI_TARGET_ALL,  4, SEQ_MIDI_NOTEON, 3, 1 },
+   { SEQMIDI_ACTION_CHGPAT,    SEQMIDI_TARGET_ALL,  5, SEQ_MIDI_NOTEON, 4, 1 },
+   { SEQMIDI_ACTION_CHGPAT,    SEQMIDI_TARGET_ALL,  6, SEQ_MIDI_NOTEON, 5, 1 },
+   { SEQMIDI_ACTION_CHGPAT,    SEQMIDI_TARGET_ALL,  7, SEQ_MIDI_NOTEON, 6, 1 },
+   { SEQMIDI_ACTION_CHGPAT,    SEQMIDI_TARGET_ALL,  8, SEQ_MIDI_NOTEON, 7, 1 },
 
    // toggle mute for each layer
-   { SEQMIDI_ACTION_MUTE,      1, SEQMIDI_VALUE_MUTE_TOGGLE, SEQ_MIDI_NOTEON,9,  1 },
-   { SEQMIDI_ACTION_MUTE,      2, SEQMIDI_VALUE_MUTE_TOGGLE, SEQ_MIDI_NOTEON,10, 1 },
-   { SEQMIDI_ACTION_MUTE,      3, SEQMIDI_VALUE_MUTE_TOGGLE, SEQ_MIDI_NOTEON,11, 1 },
-   { SEQMIDI_ACTION_MUTE,      4, SEQMIDI_VALUE_MUTE_TOGGLE, SEQ_MIDI_NOTEON,12, 1 }
-   
-
+   { SEQMIDI_ACTION_MUTE,      1, SEQMIDI_VALUE_MUTE_TOGGLE, SEQ_MIDI_NOTEON, 9,  1 },
+   { SEQMIDI_ACTION_MUTE,      2, SEQMIDI_VALUE_MUTE_TOGGLE, SEQ_MIDI_NOTEON, 10, 1 },
+   { SEQMIDI_ACTION_MUTE,      3, SEQMIDI_VALUE_MUTE_TOGGLE, SEQ_MIDI_NOTEON, 11, 1 },
+   { SEQMIDI_ACTION_MUTE,      4, SEQMIDI_VALUE_MUTE_TOGGLE, SEQ_MIDI_NOTEON, 12, 1 }
 };
 
-
-SeqProcessorNotifier::SeqProcessorNotifier(SeqProcessorNotifierHelper *hlpr) :
-   mMidiEvent(0), mUINeedsUpdate(0), mRandomSeed(0), mNotifierHelper(hlpr)
+/*============================================
+SeqProcessorNotifier
+*============================================*/
+SeqProcessorNotifier::SeqProcessorNotifier()
 {
-   for (int i = 0; i < SEQ_MAX_LAYERS; i++)
-      mPlayPosition[i].set(-1);
-
-   // generate our initial random seed.
-   // this will also happen every time playback starts or loops
-   // unless the user has fixed it to a value   
-   mRandomSeed.set(generateNewRootSeed());
-   mRecordingState.set((int)PlayRecordState::off);
-   mManualPlayingState.set((int)PlayRecordState::off);
-}
-
-int 
-SeqProcessorNotifier::getPlayPosition(int layer)
-{
-   return mPlayPosition[layer].get();
-   
-}
-
-int SeqProcessorNotifier::getCurrentPattern(int layer)
-{
-   return mCurrentPattern[layer].get();
-}
-
-bool 
-SeqProcessorNotifier::getMidiEventOccurred(int8_t *type, int8_t *channel, int8_t *number, int8_t *value)
-{
-   int val = mMidiEvent.exchange(0);
-   if (val) {
-      if (type)
-         *type = (0xFF & (val >> 24));
-      if (channel)
-         *channel = (0XFF & (val >> 16));
-      if (number)
-         *number = (0XFF & (val >> 8));
-      if (value)
-         *value = (val & 0XFF);
-      return true;
+   for (int i = 0; i < SEQ_MAX_LAYERS; i++) {
+      mPlayPosition[i].store(-1);
+      mCurrentPattern[i].store(-1);
+      mMuteState[i].store(0);
    }
-   else
-      return false;
-   
-}
-
-
-bool SeqProcessorNotifier::getMuteState(int layer)
-{
-   return mMuteState[layer].get()==1;
-}
-
-int64 SeqProcessorNotifier::getRandomSeed()
-{
-   return mRandomSeed.get();
-}
-
-bool SeqProcessorNotifier::getStepPlayedState(int layer, int position, int notenum)
-{
-   return mNotifierHelper->getStepPlayedState(layer,position,notenum);
-}
-
-void 
-SeqProcessorNotifier::setMidiEventOccurred(int8_t type, int8_t channel, int8_t number, int8_t value)
-{
-   int sum = (type << 24) | (channel << 16) | (number << 8) | value;
-   mMidiEvent.set(sum);
-}
-
-void 
-SeqProcessorNotifier::setPlayPosition(int layer, int val)
-{
-   mPlayPosition[layer].set(val);
-}
-
-void SeqProcessorNotifier::setCurrentPattern(int layer, int val)
-{
-   mCurrentPattern[layer].set(val);
-}
-
-void SeqProcessorNotifier::setMuteState(int layer, bool val)
-{
-   mMuteState[layer].set(val ? 1 : 0);
-}
-
-void 
-SeqProcessorNotifier::uiNeedsUpdate()
-{
-   mUINeedsUpdate.set(1);
-}
-
-void SeqProcessorNotifier::setRandomSeed(int64 seed)
-{
-   mRandomSeed.set(seed);
-}
-void SeqProcessorNotifier::addCompletedMidiNote(int number, int velocity, int len, int pos)
-{
-   int third;
-   jassert(number < 128);
-   jassert(velocity < 128);
-   jassert(len < SEQ_MAX_STEPS); // length is 0 based
-   jassert(pos < SEQ_MAX_STEPS);
-   third = ((len & 0xFFFF) << 16) | (pos & 0xFFFF);
-   mCompletedNoteFifo.addToFifo(number, velocity, third);
-}
-void SeqProcessorNotifier::setRecordingState(PlayRecordState state)
-{
-   mRecordingState.set((int)state);
-}
-void SeqProcessorNotifier::setPlaybackState(PlayRecordState state)
-{
-   mManualPlayingState.set((int)state);
-}
-SeqProcessorNotifier::PlayRecordState
-SeqProcessorNotifier::getRecordingState()
-{
-   return (PlayRecordState)mRecordingState.get();
-}
-SeqProcessorNotifier::PlayRecordState
-SeqProcessorNotifier::getPlaybackState()
-{
-   return (PlayRecordState)mManualPlayingState.get();
-}
-bool
-SeqProcessorNotifier::getCompletedMidiNote(int * number, int * velocity, int * len, int *pos)
-{
-   int third;
-   bool r= mCompletedNoteFifo.readFromFifo(number, velocity, &third);
-   if (r) {
-      *pos = third & 0xFFFF;
-      *len = (third >> 16) & 0xFFFF;
-   }
-   return  r;
-}
-
-void SeqProcessorNotifier::clearCompletedMidiNotes()
-{
-   mCompletedNoteFifo.clearFifo();
-}
-
-bool
-SeqProcessorNotifier::doesUINeedUpdate()
-{
-   int r = mUINeedsUpdate.exchange(0);
-   return r!=0;
 }
 
 /*============================================
 SeqDataBuffer
 *============================================*/
+SequenceData *SeqDataBuffer::beginAudioRead()
+{
+   // Announce which buffer this block reads, then confirm that it is still
+   // the published one. Together with swap() (which publishes first and then
+   // inspects mAudioReading) this guarantees that either the audio thread
+   // sees the new index or swap() sees the audio thread reading the old one.
+   int index = mCurrent.load();
+   mAudioReading.store(index);
+   const int confirmed = mCurrent.load();
+   if (confirmed != index) {
+      index = confirmed;
+      mAudioReading.store(index);
+   }
+   return &mBuffer[index];
+}
+
 void SeqDataBuffer::swap()
 {
-   /*Theoretically, if the ui thread swaps this twice while the audio thread is
-     still reading values, the audio thread might be picking up torn values, etc.
-     In practice I don't believe this would happen due to: a) audio thread does
-     quick reads of individual values, b) audio thread sets these in batches where
-     more than one is being set at a time
-   */
+   const int published = mCurrent.load();     // the copy the audio thread reads now
+   const int edited = published ? 0 : 1;      // the copy the UI just finished editing
+   mCurrent.store(edited);
 
-   int cur = mCurrent.get(); // the one the audio is looking at now
-   int wanted = cur ? 0 : 1; // which one the audio needs to look at
-                             // tell the audio to look at the other one
-   mCurrent.set(wanted);
-   
-   // mBuffer[cur] contains info that we can use for UNDO
-   mUndoBuffer = mBuffer[cur];
+   // A block that started before the flip may still be reading the old copy.
+   // Blocks are short; give up after a generous timeout in case a host stalls
+   // its audio thread mid-block, which only reintroduces the old behaviour.
+   const auto deadline = Time::getMillisecondCounterHiRes() + 250.0;
+   while (mAudioReading.load() == published && Time::getMillisecondCounterHiRes() < deadline)
+      std::this_thread::yield();
 
-   // now copy data from the one the audio is looking at into the one
-   // that the ui now has      
-   mBuffer[cur] = mBuffer[wanted];
-
-   // send notification that data is changing
-   if (mCB && mCBHandle)
-      mCB(mCBHandle);
-  
-}
-
-void SeqDataBuffer::undo()
-{
-   // set UI buffer to undo buffer
-   mBuffer[mCurrent.get() ? 0 : 1] = mUndoBuffer;
-   swap(); // note that new undo buffer will contain state before undo
-           // thus facilitating redo... how convenient!
-}
-
-void SeqDataBuffer::setChangeNotify(ChangeCallback cb, void * cbhandle)
-{
-   mCB = cb;
-   mCBHandle = cbhandle;
+   // The old copy becomes the next UI working copy.
+   mBuffer[published] = mBuffer[edited];
 }
 
 /*============================================
 SequenceData
 *============================================*/
-
-// initial list of midi mapping items
 void SequenceData::setDefaultMidiMapItems()
 {
-   SeqMidiMapItem *mi;
    setMappingCount(SEQMIDI_NUM_DEFAULT_ITEMS);
-   for (int i = 0; i < SEQMIDI_NUM_DEFAULT_ITEMS; i++) {
-      mi = getMappingItem(i);
-      *mi = gDefaultMidiMapItems[i];
-   }
-
+   for (int i = 0; i < SEQMIDI_NUM_DEFAULT_ITEMS; i++)
+      *getMappingItem(i) = gDefaultMidiMapItems[i];
 }
 
 SequenceData::SequenceData() :
@@ -248,113 +100,93 @@ SequenceData::SequenceData() :
    mRandomSeed(0),
    mOffsetTime(0),
    mAutoPlay(SEQ_PLAYMODE_AUTO),
-   mStandaloneBPM(SEQ_DEFAULT_STANDALONE_BPM)
+   mStandaloneBPM(SEQ_DEFAULT_STANDALONE_BPM),
+   mSyncMode(GgdTimeline::SyncMode::hostBars)
 {
    clearGroove();
    setDefaultMidiMapItems();
 }
 
-double 
-SequenceData::getStandaloneBPM()
+void SequenceData::setStandaloneBPM(double bpm)
 {
-   return mStandaloneBPM;
-}
-void 
-SequenceData::setStandaloneBPM(double bpm)
-{
-   // value here is arbitrary
-   jassert(bpm >= 1.0 && bpm <= 300.0);
-   mStandaloneBPM = bpm;
+   mStandaloneBPM = jlimit(1.0, 300.0, bpm);
 }
 
-SequenceLayer * 
-SequenceData::getLayer(int layer)
+SequenceLayer *SequenceData::getLayer(int layer)
 {
    jassert(layer >= 0 && layer < SEQ_MAX_LAYERS);
    return &mLayers[layer];
 }
 
-int SequenceData::getGroove(int idx) 
+const SequenceLayer *SequenceData::getLayer(int layer) const
 {
-   jassert(idx >= 0 && idx <= SEQ_DEFAULT_NUM_STEPS);
+   jassert(layer >= 0 && layer < SEQ_MAX_LAYERS);
+   return &mLayers[layer];
+}
+
+int SequenceData::getGroove(int idx) const
+{
+   jassert(idx >= 0 && idx < SEQ_DEFAULT_NUM_STEPS);
    return mGroove[idx];
-
 }
 
-void 
-SequenceData::setGroove(int idx, int val) 
+void SequenceData::setGroove(int idx, int val)
 {
-   jassert(val >= -50 && val <= 50);
-   jassert(idx >= 0 && idx <= SEQ_DEFAULT_NUM_STEPS);
-   mGroove[idx] = val;
+   jassert(idx >= 0 && idx < SEQ_DEFAULT_NUM_STEPS);
+   mGroove[idx] = jlimit(-50, 50, val);
 }
 
-void 
-SequenceData::clearLayer(int layer)
-{
-   jassert(layer >= 0 && layer <= SEQ_MAX_LAYERS);
-   mLayers[layer].clear();
-}
-
-void 
-SequenceData::clearPattern(int layer, int pattern)
-{
-   std::unique_ptr<SequenceLayer::Pattern> blank = std::unique_ptr<SequenceLayer::Pattern>(new SequenceLayer::Pattern());
-   jassert(layer >= 0 && layer <= SEQ_MAX_LAYERS);
-   jassert(pattern >= 0 && pattern <= SEQ_MAX_PATTERNS);
-   mLayers[layer].mPats[pattern] = *blank;   
-}
-
-void
-SequenceData::clearGroove()
+void SequenceData::clearGroove()
 {
    for (int i = 0; i < SEQ_DEFAULT_NUM_STEPS; i++)
       mGroove[i] = 0;
 }
 
-void
-SequenceData::clearMapping()
+void SequenceData::clearLayer(int layer)
+{
+   jassert(layer >= 0 && layer < SEQ_MAX_LAYERS);
+   mLayers[layer].clear();
+}
+
+void SequenceData::clearPattern(int layer, int pattern)
+{
+   jassert(layer >= 0 && layer < SEQ_MAX_LAYERS);
+   jassert(pattern >= 0 && pattern < SEQ_MAX_PATTERNS);
+   mLayers[layer].mPats[pattern] = SequenceLayer::Pattern();
+}
+
+void SequenceData::copyPatternData(int targLayer, int targPat, int srcLayer, int srcPat)
+{
+   jassert(targLayer >= 0 && targLayer < SEQ_MAX_LAYERS);
+   jassert(srcLayer >= 0 && srcLayer < SEQ_MAX_LAYERS);
+   jassert(targPat >= 0 && targPat < SEQ_MAX_PATTERNS);
+   jassert(srcPat >= 0 && srcPat < SEQ_MAX_PATTERNS);
+   mLayers[targLayer].mPats[targPat] = mLayers[srcLayer].mPats[srcPat];
+}
+
+void SequenceData::clearMapping()
 {
    for (int i = 0; i < SEQMIDI_MAX_ITEMS; i++)
       mMidiMap[i].clear();
 }
 
-void
-SequenceData::setMappingCount(int count) 
+void SequenceData::setMappingCount(int count)
 {
-   jassert(count >= 0 && count < SEQMIDI_MAX_ITEMS);
-   mMidiMapCount = count;
-
+   mMidiMapCount = jlimit(0, SEQMIDI_MAX_ITEMS - 1, count);
 }
 
-int 
-SequenceData::getMappingCount() 
-{
-   return mMidiMapCount;
-}
-
-SeqMidiMapItem * 
-SequenceData::getMappingItem(int ind) 
+SeqMidiMapItem *SequenceData::getMappingItem(int ind)
 {
    jassert(ind >= 0 && ind < SEQMIDI_MAX_ITEMS);
    return &mMidiMap[ind];
 }
 
-void
-SequenceData::setSwing(int val) 
+void SequenceData::setSwing(int val)
 {
-   jassert(val >= -50 && val <= 50);
-   mSwing = val;
+   mSwing = jlimit(SEQ_MIN_SWING, SEQ_MAX_SWING, val);
 }
 
-int
-SequenceData::getSwing() 
-{
-   return mSwing;
-}
-
-void
-SequenceData::setMidiPassthru(int val) 
+void SequenceData::setMidiPassthru(int val)
 {
    switch (val) {
    case SEQ_MIDI_PASSTHRU_NONE:
@@ -363,19 +195,11 @@ SequenceData::setMidiPassthru(int val)
       mMidiPassthru = val;
       break;
    default:
-      jassertfalse;
       break;
    }
 }
 
-int
-SequenceData::getMidiPassthru() 
-{
-   return mMidiPassthru;
-}
-
-void 
-SequenceData::setMidiRespond(int val) 
+void SequenceData::setMidiRespond(int val)
 {
    switch (val) {
    case SEQ_MIDI_RESPOND_NO:
@@ -383,79 +207,15 @@ SequenceData::setMidiRespond(int val)
       mMidiRespond = val;
       break;
    default:
-      jassertfalse;
+      break;
    }
-}
-
-int
-SequenceData::getMidiRespond() 
-{
-   return mMidiRespond;
-}
-
-void 
-SequenceData::copyLayer(int targLayer, int srcLayer)
-{
-   jassert(targLayer >= 0 && targLayer <= SEQ_MAX_LAYERS);
-   jassert(srcLayer >= 0 && srcLayer <= SEQ_MAX_LAYERS);
-   mLayers[targLayer] = mLayers[srcLayer];
-}
-
-void
-SequenceData::copyScaleData(int targLayer, int srcLayer)
-{
-   jassert(targLayer >= 0 && targLayer <= SEQ_MAX_LAYERS);
-   jassert(srcLayer >= 0 && srcLayer <= SEQ_MAX_LAYERS);
-   //mLayers[targLayer] = mLayers[srcLayer];
-   mLayers[targLayer].copyScaleData(mLayers[srcLayer]);
-}
-
-void
-SequenceData::copyPatternData(int targLayer, int targPat, int srcLayer, int srcPat)
-{
-   jassert(targLayer >= 0 && targLayer <= SEQ_MAX_LAYERS);
-   jassert(srcLayer >= 0 && srcLayer <= SEQ_MAX_LAYERS);
-   jassert(targPat >= 0 && targPat <= SEQ_MAX_PATTERNS);
-   jassert(srcPat >= 0 && srcPat <= SEQ_MAX_PATTERNS);
-   mLayers[targLayer].mPats[targPat] = mLayers[srcLayer].mPats[srcPat];
-}
-
-int64 SequenceData::getRandomSeed()
-{
-   return mRandomSeed;
-}
-
-void SequenceData::setRandomSeed(int64 val)
-{
-   mRandomSeed = val;
-}
-
-int SequenceData::getOffsetTime()
-{
-   return mOffsetTime;
-}
-
-void SequenceData::setOffsetTime(int ms)
-{
-   mOffsetTime = ms;
-}
-
-int SequenceData::getAutoPlayMode()
-{
-   return mAutoPlay;
-}
-
-void SequenceData::setAutoPlayMode(int autoplay)
-{
-   mAutoPlay = autoplay;
 }
 
 /*============================================
 SequenceLayer
 *============================================*/
-void
-SequenceLayer::clear() {
-   std::unique_ptr<Pattern> blankPat=std::unique_ptr<Pattern>(new Pattern());
+void SequenceLayer::clear()
+{
    mMuted = false;
    mNumRows = SEQ_MAX_VISIBLE_ROWS;
    mNumSteps = SEQ_DEFAULT_NUM_STEPS;
@@ -468,13 +228,12 @@ SequenceLayer::clear() {
    mMidiChannel = SEQ_DEFAULT_MIDI_CHAN;
    mDutyCycle = SEQ_DUTY_DEFAULT;
    mStepsPerMeasure = SEQ_DEFAULT_NUM_STEPS;
-   // this is the default scale
    setKeyScaleOct(SEQ_DEFAULT_SCALE, SEQ_DEFAULT_KEY, SEQ_DEFAULT_OCTAVE);
-   // fill custom notes from standard notes initially
+   // custom notes start out as the standard notes
    mNoteSets[customSet] = mNoteSets[standardSet];
-   for (int i = 0; i<SEQ_MAX_PATTERNS; i++)
-      mPats[i] = *blankPat;
-   
+   for (int i = 0; i < SEQ_MAX_PATTERNS; i++)
+      mPats[i] = Pattern();
+
    strncpy(mLayerName, SEQ_DEFAULT_LAYER_NAME, SEQ_LAYER_NAME_MAXLEN);
    mLayerName[SEQ_LAYER_NAME_MAXLEN - 1] = 0;
 
@@ -484,176 +243,25 @@ SequenceLayer::clear() {
    mCombineMode = false;
 }
 
-void SequenceLayer::setMuted(bool muted)
+GgdEventPattern *SequenceLayer::getEventPattern(int pat)
 {
-   mMuted=muted;
-}
-
-bool SequenceLayer::getMuted()
-{
-return mMuted;
-}
-
-bool SequenceLayer::addChainSource(int row, int step, int sourceRow, int sourceStep,
-   bool negtgt, bool negsrc, int pat)
-{
-   int i;
-   int availableCell = -1;
-   jassert(row >= 0 && row < SEQ_MAX_ROWS);
-   jassert(step >= 0 && step < SEQ_MAX_STEPS);
-   jassert(sourceRow >= 0 && sourceRow < SEQ_MAX_ROWS);
-   jassert(sourceStep >= 0 && sourceStep < SEQ_MAX_STEPS);
-   if (pat == -1)
+   if (pat < 0)
       pat = mCurrentPattern;
    jassert(pat >= 0 && pat < SEQ_MAX_PATTERNS);
-
-   SourceCell *cells = mPats[pat].mChains[step].cells;
-   // we need to pick the next available cell unless there is a cell already representing
-   // this relationship, in which case we use that (ie nothing changes with it unless neg/pos
-   // is being changed
-   for (i = 0; i < SEQ_MAX_CHAIN_SOURCES; i++) {
-      if ((cells[i].flags & SEQ_CHAIN_FLAG_USED) == 0 &&
-         availableCell==-1) {
-         availableCell = i; // potentially use this (unless we find a cell representing the same data below)
-      }
-      else if ((cells[i].flags & SEQ_CHAIN_FLAG_USED) &&
-         cells[i].col == static_cast<uint16_t>(sourceStep) &&
-         cells[i].row == (unsigned char)sourceRow &&
-         cells[i].targetrow == (unsigned char)row)
-      {
-         availableCell = i; // always use this
-         break;
-      }
-   }
-   if (availableCell==-1)
-      return false; // none available
-
-   cells[availableCell].flags = SEQ_CHAIN_FLAG_USED | 
-      (negtgt ? SEQ_CHAIN_FLAG_NEGTGT : 0) |
-      (negsrc ? SEQ_CHAIN_FLAG_NEGSRC : 0);
-   cells[availableCell].col = static_cast<uint16_t>(sourceStep);
-   cells[availableCell].row = (unsigned char)sourceRow;
-   cells[availableCell].targetrow = (unsigned char)row;
-   return true;
+   return &mPats[pat].mEvents;
 }
 
-int SequenceLayer::getNumChainSources(int row, int step, int pat)
+const GgdEventPattern *SequenceLayer::getEventPattern(int pat) const
 {
-   int i;
-   int cnt = 0;
-   jassert(row >= 0 && row < SEQ_MAX_ROWS);
-   jassert(step >= 0 && step < SEQ_MAX_STEPS);
-   if (pat == -1)
+   if (pat < 0)
       pat = mCurrentPattern;
    jassert(pat >= 0 && pat < SEQ_MAX_PATTERNS);
-
-   SourceCell *cells = mPats[pat].mChains[step].cells;
-   for (i = 0; i < SEQ_MAX_CHAIN_SOURCES; i++) {
-      if ((cells[i].flags & SEQ_CHAIN_FLAG_USED) && cells[i].targetrow == row) {
-         cnt++;
-      }
-   }
-   return cnt;
-
+   return &mPats[pat].mEvents;
 }
 
-bool SequenceLayer::getChainSource(int row, int step, int * iterate,
-   int * sourceRow, int * sourceCol, bool * negtgt, bool *negsrc, int pat)
+void SequenceLayer::setKeyScaleOct(const char *scale, const char *key, int octave)
 {
-   int i;
-   jassert(row >= 0 && row < SEQ_MAX_ROWS);
-   jassert(step >= 0 && step < SEQ_MAX_STEPS);
-   jassert(*iterate >= -1 && *iterate <= SEQ_MAX_CHAIN_SOURCES);
-   if (pat == -1)
-      pat = mCurrentPattern;
-   jassert(pat >= 0 && pat < SEQ_MAX_PATTERNS);
-
-   if (*iterate == SEQ_MAX_CHAIN_SOURCES)
-      return false;
-
-   SourceCell *cells = mPats[pat].mChains[step].cells;
-   (*iterate)++;
-   for (i = *iterate; i < SEQ_MAX_CHAIN_SOURCES; i++) {
-      if ((cells[i].flags & SEQ_CHAIN_FLAG_USED) &&
-         cells[i].targetrow == row) {
-         *iterate = i;
-         *sourceRow = cells[i].row;
-         *sourceCol = cells[i].col;
-         *negtgt = (cells[i].flags & SEQ_CHAIN_FLAG_NEGTGT) ? true : false;
-         *negsrc = (cells[i].flags & SEQ_CHAIN_FLAG_NEGSRC) ? true : false;
-         return true;
-      }
-   }
-
-   *iterate = i;
-   return false;
-
-}
-
-bool SequenceLayer::getChainTarget(int row, int step, int * iterate, 
-   int * targRow, int * targCol, bool * negtgt, bool *negsrc, int pat)
-{
-   jassert(row >= 0 && row < SEQ_MAX_ROWS);
-   jassert(step >= 0 && step < SEQ_MAX_STEPS);
-   jassert(*iterate >= -1 && *iterate <= SEQ_MAX_CHAIN_SOURCES * SEQ_MAX_STEPS);
-   if (pat == -1)
-      pat = mCurrentPattern;
-   jassert(pat >= 0 && pat < SEQ_MAX_PATTERNS);
-
-   if (*iterate == SEQ_MAX_CHAIN_SOURCES * SEQ_MAX_STEPS)
-      return false;
-
-   (*iterate)++;
-   int i, j;
-   // find where we were last
-   i = (*iterate) / SEQ_MAX_CHAIN_SOURCES;
-   j = (*iterate) % SEQ_MAX_CHAIN_SOURCES;
-   goto iterate_jump;
-   // iterate over chain sources for each step to find a match for row and step
-   for (; i < SEQ_MAX_STEPS; i++) {      
-      for (j=0; j < SEQ_MAX_CHAIN_SOURCES; j++) {
-iterate_jump:
-         SourceCell *cells = mPats[pat].mChains[i].cells;
-         if ((cells[j].flags & SEQ_CHAIN_FLAG_USED) &&
-            cells[j].row == row && cells[j].col == step) {
-            *targRow = cells[j].targetrow;
-            *targCol = i;
-            *negtgt = (cells[j].flags & SEQ_CHAIN_FLAG_NEGTGT) ? true : false;
-            *negsrc = (cells[j].flags & SEQ_CHAIN_FLAG_NEGSRC) ? true : false;
-            return true;
-         }
-         else
-            (*iterate)++;
-      }
-   }
-   return false;
-}
-
-void SequenceLayer::clearChainSources(int row, int step, int pat)
-{
-   int i;
-   jassert(row >= 0 && row < SEQ_MAX_ROWS);
-   jassert(step >= 0 && step < SEQ_MAX_STEPS);
-   if (pat == -1)
-      pat = mCurrentPattern;
-   jassert(pat >= 0 && pat < SEQ_MAX_PATTERNS);
-
-   SourceCell *cells = mPats[pat].mChains[step].cells;
-   
-   for (i = 0; i < SEQ_MAX_CHAIN_SOURCES; i++) {
-      if ((cells[i].flags & SEQ_CHAIN_FLAG_USED) &&
-         cells[i].targetrow == row) {
-         cells[i] = SourceCell();         
-      }
-   }
-
-}
-
-
-void
-SequenceLayer::setKeyScaleOct(const char * scale, const char * key, int octave)
-{
-   jassert(octave >= 0 && octave < SEQ_NUM_OCTAVES);
+   octave = jlimit(0, SEQ_NUM_OCTAVES - 1, octave);
 
    strncpy(mStdKeyName, key, SEQ_KEY_NAME_MAXLEN);
    mStdKeyName[SEQ_KEY_NAME_MAXLEN - 1] = 0;
@@ -661,440 +269,139 @@ SequenceLayer::setKeyScaleOct(const char * scale, const char * key, int octave)
    mStdScaleName[SEQ_SCALE_NAME_MAXLEN - 1] = 0;
    mStdOctave = octave;
 
-   // now fill in notes
    SeqScale iterator;
    iterator.startIterateNotesInScale(mStdScaleName, mStdKeyName, octave);
 
    for (int i = 0; i < SEQ_MAX_ROWS - 1; i++)
       mNoteSets[standardSet].notes[(SEQ_MAX_ROWS - 2) - i].note = iterator.getNextNote();
-   mNoteSets[standardSet].notes[SEQ_MAX_ROWS - 1].note = -1; //"off" 
-
+   mNoteSets[standardSet].notes[SEQ_MAX_ROWS - 1].note = -1; // "off"
 }
 
-void 
-SequenceLayer::getKeyScaleOct(const char ** scale, const char ** key, int * oct)
+void SequenceLayer::getKeyScaleOct(const char **scale, const char **key, int *oct) const
 {
    *oct = mStdOctave;
    *key = mStdKeyName;
    *scale = mStdScaleName;
 }
 
-void 
-SequenceLayer::copyScaleData(const SequenceLayer & src)
-{
-   int i;
-   for (i = 0; i<noteSetCount; i++)
-      mNoteSets[i] = src.mNoteSets[i];
-   mCurrentNoteSet = src.mCurrentNoteSet;
-   memcpy(mStdKeyName, src.mStdKeyName, SEQ_KEY_NAME_MAXLEN);
-   memcpy(mStdScaleName, src.mStdScaleName, SEQ_SCALE_NAME_MAXLEN);
-   mStdOctave = src.mStdOctave;
-}
-
-int 
-SequenceLayer::getNumSteps() 
-{
-   return mNumSteps;
-}
-
-void 
-SequenceLayer::setNumSteps(int val)
-{
-   jassert(val >= SEQ_MIN_STEPS && val <= SEQ_MAX_STEPS);
-   mNumSteps = val;
-   // check lengths of all steps to make sure they would not go past the end of the pattern
-   for (int i = 0; i < mNumSteps; i++) {
-      for (int j = 0; j < mNumRows; j++) {
-         Cell *c = &mPats[mCurrentPattern].mRows[j].mSteps[i];
-         if (/*i + */c->length >= mNumSteps-1) {
-            setLength(j, i, (int8_t)(mNumSteps - 1)); // (i + 1)));
-         }
-      }
-   }
-
-}
-
-void 
-SequenceLayer::setVel(int row, int step, int8_t vel, int pat) 
+void SequenceLayer::setNote(int row, int8_t val, bool custom)
 {
    jassert(row >= 0 && row < SEQ_MAX_ROWS);
-   jassert(step >= 0 && step < SEQ_MAX_STEPS);
-   if (pat == -1)
-      pat = mCurrentPattern;
-   jassert(pat >= 0 && pat < SEQ_MAX_PATTERNS);
-   mPats[pat].mRows[row].mSteps[step].velo = vel;
+   mNoteSets[custom ? customSet : standardSet].notes[row].note = val;
 }
 
-int8_t 
-SequenceLayer::getVel(int row, int step, int pat) 
+int8_t SequenceLayer::getNote(int row, bool custom) const
 {
    jassert(row >= 0 && row < SEQ_MAX_ROWS);
-   jassert(step >= 0 && step < SEQ_MAX_STEPS);
-   if (pat == -1)
-      pat = mCurrentPattern;
-   jassert(pat >= 0 && pat < SEQ_MAX_PATTERNS);
-   return mPats[pat].mRows[row].mSteps[step].velo;
+   return mNoteSets[custom ? customSet : standardSet].notes[row].note;
 }
 
-void 
-SequenceLayer::setProb(int row, int step, int8_t prob, int pat) 
-{
-   jassert(row >= 0 && row < SEQ_MAX_ROWS);
-   jassert(step >= 0 && step < SEQ_MAX_STEPS);
-   jassert(prob >= SEQ_PROB_OFF);
-   if (pat == -1)
-      pat = mCurrentPattern;
-   jassert(pat >= 0 && pat < SEQ_MAX_PATTERNS);
-   mPats[pat].mRows[row].mSteps[step].prob = prob;
-   if (prob == SEQ_PROB_OFF) {
-      // clear chains that target this step and source from this step
-      // TODO very inefficient to have this code here
-      for (int j = 0; j < SEQ_MAX_STEPS; j++) {
-         for (int i = 0; i < SEQ_MAX_CHAIN_SOURCES; i++) {
-            if( (mPats[pat].mChains[j].cells[i].flags & SEQ_CHAIN_FLAG_USED) &&
-               mPats[pat].mChains[j].cells[i].col == step &&
-               mPats[pat].mChains[j].cells[i].row == row) {
-               mPats[pat].mChains[j].cells[i].flags = 0;
-            }
-         }
-      }
-
-      for (int i = 0; i < SEQ_MAX_CHAIN_SOURCES; i++) {         
-         if ((mPats[mCurrentPattern].mChains[step].cells[i].flags & SEQ_CHAIN_FLAG_USED)
-            && mPats[mCurrentPattern].mChains[step].cells[i].targetrow == row)
-            mPats[mCurrentPattern].mChains[step].cells[i].flags = 0;
-      }
-   }
-}
-
-int8_t 
-SequenceLayer::getProb(int row, int step, int pat) 
-{
-   jassert(row >= 0 && row < SEQ_MAX_ROWS);
-   jassert(step >= 0 && step < SEQ_MAX_STEPS);
-   if (pat == -1)
-      pat = mCurrentPattern;
-   jassert(pat >= 0 && pat < SEQ_MAX_PATTERNS);
-
-   return mPats[pat].mRows[row].mSteps[step].prob;
-}
-
-void 
-SequenceLayer::setLength(int row, int step, int8_t length, int pat) 
-{
-   jassert(row >= 0 && row < SEQ_MAX_ROWS);
-   jassert(step >= 0 && step < SEQ_MAX_STEPS);
-   jassert(length >= -1 * (SEQ_MAX_RETRIGGER-1));
-   if (pat == -1)
-      pat = mCurrentPattern;
-   jassert(pat >= 0 && pat < SEQ_MAX_PATTERNS);
-   mPats[pat].mRows[row].mSteps[step].length = length;
-}
-
-int8_t
-SequenceLayer::getLength(int row, int step, int pat) 
-{
-   jassert(row >= 0 && row < SEQ_MAX_ROWS);
-   jassert(step >= 0 && step < SEQ_MAX_STEPS);
-   if (pat == -1)
-      pat = mCurrentPattern;
-   jassert(pat >= 0 && pat < SEQ_MAX_PATTERNS);
-
-   return mPats[pat].mRows[row].mSteps[step].length;
-}
-
-void SequenceLayer::setOffset(int row, int step, int8_t offset, int pat)
-{
-   jassert(row >= 0 && row < SEQ_MAX_ROWS);
-   jassert(step >= 0 && step < SEQ_MAX_STEPS);
-   jassert(offset >= -50 && offset <= 50);
-   if (pat == -1)
-      pat = mCurrentPattern;
-   jassert(pat >= 0 && pat < SEQ_MAX_PATTERNS);
-   mPats[pat].mRows[row].mSteps[step].offset = offset;
-}
-
-int8_t SequenceLayer::getOffset(int row, int step, int pat)
-{
-   jassert(row >= 0 && row < SEQ_MAX_ROWS);
-   jassert(step >= 0 && step < SEQ_MAX_STEPS);
-   if (pat == -1)
-      pat = mCurrentPattern;
-   jassert(pat >= 0 && pat < SEQ_MAX_PATTERNS);
-
-   return mPats[pat].mRows[row].mSteps[step].offset;
-}
-
-void SequenceLayer::clearCell(int row, int step)
-{
-   setLength(row, step, 0);
-   setProb(row, step, SEQ_PROB_OFF);
-   setVel(row, step, 0);
-   setOffset(row, step, 0);
-}
-
-void SequenceLayer::copyCell(int targRow, int targStep, int srcRow, int srcStep)
-{
-   int8_t srcProb;
-   // clear out chains from target (if any)
-   clearCell(targRow, targStep);
-
-   srcProb = getProb(srcRow, srcStep);
-   if (srcProb != SEQ_PROB_OFF) {
-      setProb(targRow, targStep, srcProb);
-      // copy chain sources and targets across
-      int it = -1, srow = 0, scol = 0;
-      bool negtgt = false;
-      bool negsrc = false;
-      while (getChainSource(srcRow, srcStep, &it, &srow, &scol, &negtgt, &negsrc)) {
-         addChainSource(targRow, targStep, srow, scol, negtgt, negsrc);
-      }
-      it = -1;
-      // effectively set the source cell to our new location (i know, hard to understand)
-      while (getChainTarget(srcRow, srcStep, &it, &srow, &scol, &negtgt, &negsrc)) {
-         addChainSource(srow, scol, targRow, targStep, negtgt, negsrc);
-      }
-
-      setLength(targRow, targStep, getLength(srcRow, srcStep));
-      setVel(targRow, targStep, getVel(srcRow, srcStep));
-      setOffset(targRow, targStep, getOffset(srcRow, srcStep));
-   }
-}
-
-void 
-SequenceLayer::setNote(int row, int8_t val, bool custom) 
-{
-   jassert(row >= 0 && row < SEQ_MAX_ROWS);
-   WhichNoteSet s = custom ? customSet : standardSet;
-   mNoteSets[s].notes[row].note = val;
-}
-
-int8_t 
-SequenceLayer::getNote(int row, bool custom) 
-{
-   jassert(row >= 0 && row < SEQ_MAX_ROWS);
-   WhichNoteSet s = custom ? customSet : standardSet;
-   return mNoteSets[s].notes[row].note;
-}
-
-char *
-SequenceLayer::getNoteName(int row) 
+const char *SequenceLayer::getNoteName(int row) const
 {
    jassert(row >= 0 && row < SEQ_MAX_ROWS);
    return mNoteSets[customSet].notes[row].noteName;
 }
 
-void 
-SequenceLayer::setNoteName(int row, const char * name) 
+void SequenceLayer::setNoteName(int row, const char *name)
 {
    jassert(row >= 0 && row < SEQ_MAX_ROWS);
-   memset(mNoteSets[customSet].notes[row].noteName, 0, SEQ_MAX_NOTELABEL_LEN);
-   strncpy(mNoteSets[customSet].notes[row].noteName, name, SEQ_MAX_NOTELABEL_LEN);
+   auto &target = mNoteSets[customSet].notes[row].noteName;
+   memset(target, 0, SEQ_MAX_NOTELABEL_LEN);
+   strncpy(target, name, SEQ_MAX_NOTELABEL_LEN - 1);
 }
 
-// get note from "current" (either custom or standard)
-
-int8_t 
-SequenceLayer::getCurNote(int row) 
+int8_t SequenceLayer::getCurNote(int row) const
 {
-   jassert(row >= 0 && row < SEQ_MAX_ROWS);
+   if (row < 0 || row >= SEQ_MAX_ROWS)
+      return -1;
    return mNoteSets[mCurrentNoteSet].notes[row].note;
 }
 
-int 
-SequenceLayer::getRowForNote(int8_t note)
+void SequenceLayer::setMaxRows(int val)
 {
-   NoteSet *set = &mNoteSets[mCurrentNoteSet];
-   for (int i = SEQ_MAX_ROWS-1; i >= 0; i--) {
-      if (set->notes[i].note == note)
-         return i;
-   }
-   return -1;
+   mNumRows = jlimit(SEQ_MIN_ROWS, SEQ_MAX_ROWS, val);
 }
 
-// set us to point to either custom or standard
-
-void
-SequenceLayer::setNoteSource(bool custom) 
+void SequenceLayer::setMaxPoly(int val)
 {
-   mCurrentNoteSet = custom ? customSet : standardSet;
-}
-
-// determine whether we are in custom notes
-
-bool
-SequenceLayer::noteSourceIsCustom() 
-{
-   return mCurrentNoteSet == customSet;
-}
-
-int
-SequenceLayer::getMaxRows() 
-{
-   return mNumRows;
-}
-
-void
-SequenceLayer::setMaxRows(int val) 
-{
-   jassert(val >= SEQ_MIN_ROWS&& val <= SEQ_MAX_ROWS);
-   mNumRows = val;
-}
-
-int
-SequenceLayer::getMaxPoly() 
-{
-   return mMaxPoly;
-}
-
-void
-SequenceLayer::setMaxPoly(int val) 
-{
-   jassert(val >= 1 && val <= SEQ_MAX_ROWS);
-   mMaxPoly = val;
-}
-
-int SequenceLayer::getPolyBias()
-{
-   return mPolyBias;
+   mMaxPoly = jlimit(1, SEQ_MAX_ROWS, val);
 }
 
 void SequenceLayer::setPolyBias(int val)
 {
-   jassert(val >= SEQ_POLY_BIAS_MIN &&
-      val <= SEQ_POLY_BIAS_MAX);
-   mPolyBias = val;
+   mPolyBias = jlimit(SEQ_POLY_BIAS_MIN, SEQ_POLY_BIAS_MAX, val);
 }
 
-bool
-SequenceLayer::isMonoMode() 
+void SequenceLayer::setNumSteps(int val)
 {
-   return mIsMonoMode;
+   mNumSteps = jlimit(SEQ_MIN_STEPS, SEQ_MAX_STEPS, val);
 }
 
-void
-SequenceLayer::setMonoMode(bool val) 
+void SequenceLayer::setClockDivider(int c)
 {
-   mIsMonoMode = val;
+   mClockDivider = jlimit(SEQ_MIN_CLOCK_DIV, SEQ_MAX_CLOCK_DIV, c);
 }
 
-bool SequenceLayer::isCombineMode()
+void SequenceLayer::setMidiChannel(int8_t val)
 {
-   return mCombineMode;
+   mMidiChannel = (int8_t)jlimit(1, 16, (int)val);
 }
 
-void SequenceLayer::setCombineMode(bool val)
+void SequenceLayer::setStepsPerMeasure(int val)
 {
-   mCombineMode = val;
+   mStepsPerMeasure = jlimit(SEQ_MIN_STEPS, SEQ_MAX_STEPS_PER_MEASURE, val);
 }
 
-int
-SequenceLayer::getClockDivider() 
+void SequenceLayer::setDutyCycle(int val)
 {
-   return mClockDivider;
-}
-
-void
-SequenceLayer::setClockDivider(int c) 
-{
-   jassert(c >= SEQ_MIN_CLOCK_DIV && c <= SEQ_MAX_CLOCK_DIV);
-   mClockDivider = c;
-}
-
-int8_t
-SequenceLayer::getMidiChannel() 
-{
-   return mMidiChannel;
-}
-
-void
-SequenceLayer::setMidiChannel(int8_t val) 
-{
-   jassert(val >= 1 && val <= 16);
-   mMidiChannel = val;
-}
-
-int
-SequenceLayer::getStepsPerMeasure() 
-{
-   return mStepsPerMeasure;
-}
-
-void
-SequenceLayer::setStepsPerMeasure(int val) 
-{
-   jassert(val >= SEQ_MIN_STEPS && val <= SEQ_MAX_STEPS_PER_MEASURE);
-   mStepsPerMeasure = val;
-}
-
-int
-SequenceLayer::getDutyCycle() 
-{
-   return mDutyCycle;
-}
-
-void
-SequenceLayer::setDutyCycle(int val) 
-{
-   jassert(val >= SEQ_DUTY_MIN && val <= SEQ_DUTY_MAX);
-   mDutyCycle = val;
+   mDutyCycle = jlimit(SEQ_DUTY_MIN, SEQ_DUTY_MAX, val);
 }
 
 void SequenceLayer::setHumanVelocity(int val)
 {
-   jassert(val >= 0 && val <= SEQ_MAX_HUMAN_VELOCITY);
-   mHumanVelo = val;
-}
-
-int SequenceLayer::getHumanVelocity()
-{
-   return mHumanVelo;   
+   mHumanVelo = jlimit(0, SEQ_MAX_HUMAN_VELOCITY, val);
 }
 
 void SequenceLayer::setHumanPosition(int val)
 {
-   jassert(val >= 0 && val <= SEQ_MAX_HUMAN_POSITION);
-   mHumanPos = val;
-}
-
-int SequenceLayer::getHumanPosition()
-{
-   return mHumanPos;
+   mHumanPos = jlimit(0, SEQ_MAX_HUMAN_POSITION, val);
 }
 
 void SequenceLayer::setHumanLength(int val)
 {
-   jassert(val >= 0 && val <= SEQ_MAX_HUMAN_LENGTH);
-   mHumanLen = val;
+   mHumanLen = jlimit(0, SEQ_MAX_HUMAN_LENGTH, val);
 }
 
-int SequenceLayer::getHumanLength()
-{
-   return mHumanLen;
-}
-
-const char * SequenceLayer::getLayerName()
-{
-   return mLayerName;
-}
-
-void SequenceLayer::setLayerName(const char * txt)
+void SequenceLayer::setLayerName(const char *txt)
 {
    strncpy(mLayerName, txt, SEQ_LAYER_NAME_MAXLEN);
    mLayerName[SEQ_LAYER_NAME_MAXLEN - 1] = 0;
 }
 
-void SequenceLayer::setPatternName(const char * txt, int pat)
+void SequenceLayer::setPatternName(const char *txt, int pat)
 {
    if (pat == -1)
       pat = mCurrentPattern;
    jassert(pat >= 0 && pat < SEQ_MAX_PATTERNS);
-   strncpy(mPats[pat].mName, txt, SEQ_PATTERN_NAME_MAXLEN);
-   mPats[pat].mName[SEQ_PATTERN_NAME_MAXLEN - 1] = 0;
+   char *dest = mPats[pat].mName;
+   strncpy(dest, txt, SEQ_PATTERN_NAME_MAXLEN);
+   dest[SEQ_PATTERN_NAME_MAXLEN - 1] = 0;
 
+   // Names are UTF-8. Never leave half a multi-byte character behind when
+   // a long name is cut to fit.
+   const int length = (int)strlen(dest);
+   int start = length;
+   while (start > 0 && ((unsigned char)dest[start - 1] & 0xC0) == 0x80)
+      --start;
+   if (start > 0) {
+      const unsigned char lead = (unsigned char)dest[start - 1];
+      const int expected = lead >= 0xF0 ? 4 : lead >= 0xE0 ? 3 : lead >= 0xC0 ? 2 : 1;
+      if (length - (start - 1) < expected)
+         dest[start - 1] = 0;
+   }
 }
 
-const char * SequenceLayer::getPatternName(int pat)
+const char *SequenceLayer::getPatternName(int pat) const
 {
    if (pat == -1)
       pat = mCurrentPattern;
@@ -1102,27 +409,20 @@ const char * SequenceLayer::getPatternName(int pat)
    return mPats[pat].mName;
 }
 
-
-int SequenceLayer::getCurrentPattern()
-{
-  return mCurrentPattern;
-}
 void SequenceLayer::setCurrentPattern(int p)
 {
-  jassert(p >=0 && p < SEQ_MAX_PATTERNS);
-  mCurrentPattern = p;
+   mCurrentPattern = jlimit(0, SEQ_MAX_PATTERNS - 1, p);
 }
 
 /*============================================
 SeqMidiMapItem
 *============================================*/
-void
-SeqMidiMapItem::clear() 
+void SeqMidiMapItem::clear()
 {
-   mAction = SEQMIDI_ACTION_INVALID;   // invalid
-   mTarget = 0;   // invalid
-   mValue = 0;    // invalid
-   mType = 0;     // invalid
-   mNote = 0;     // valid
-   mChannel = 1;  // valid
+   mAction = SEQMIDI_ACTION_INVALID;
+   mTarget = 0;
+   mValue = 0;
+   mType = 0;
+   mNote = 0;
+   mChannel = 1;
 }

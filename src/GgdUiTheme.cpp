@@ -701,6 +701,9 @@ void GgdLookAndFeel::drawButtonText(juce::Graphics& g, juce::TextButton& button,
         ? role(GgdThemeRole::accentText)
         : (style == GgdButton::Style::quiet && !highlighted ? role(GgdThemeRole::muted)
                                                             : role(GgdThemeRole::text));
+    // A colour set on the button itself (for example a warning) wins.
+    if (!on && button.isColourSpecified(juce::TextButton::textColourOffId))
+        colour = button.findColour(juce::TextButton::textColourOffId);
     if (!button.isEnabled())
         colour = colour.withMultipliedAlpha(0.4f);
 

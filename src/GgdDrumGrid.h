@@ -86,6 +86,10 @@ public:
     // empty area right of and below the pattern is painted consistently.
     void setViewportSize(int width, int height, int scrollbarThickness);
 
+    // Area of one grid cell in component coordinates (empty if the row is
+    // not visible in the current kit).
+    juce::Rectangle<float> getCellBounds(int canonicalRow, int tick) const;
+
     // Selection queries and transforms used by the context strip.
     int getSelectedCount() const { return static_cast<int>(selection.size()); }
     int getSelectedProbability() const; // -1 when mixed or empty
@@ -114,6 +118,7 @@ public:
     void scaleSelectedVelocityRange(float factor);
     void thinSelection();
     void nudgeSelection(int horizontal, int vertical, bool duplicate);
+    void showContextMenu(juce::Point<float> position);
 
     // Keyboard shortcuts. Key events are used whenever the host delivers
     // them; keys a host keeps to itself are polled instead while the grid

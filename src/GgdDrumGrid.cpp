@@ -450,6 +450,14 @@ void GgdDrumGrid::updateSize()
     setSize(width, height);
 }
 
+juce::Rectangle<float> GgdDrumGrid::getCellBounds(int canonical, int tick) const
+{
+    const int y = rowY(canonical);
+    if (y < 0)
+        return {};
+    return { xForTick(tick), static_cast<float>(y), cellWidth(), static_cast<float>(rowHeight) };
+}
+
 //==============================================================================
 GgdDrumGrid::EventRef GgdDrumGrid::hitAt(juce::Point<float> position) const
 {
@@ -1269,7 +1277,8 @@ void GgdDrumGrid::updateMarquee()
 
 void GgdDrumGrid::mouseDown(const juce::MouseEvent& e)
 {
-    grabKeyboardFocus();
+    if (isShowing())
+        grabKeyboardFocus();
     dragStart = e.position;
     gestureChanged = false;
     hideChips();
@@ -1358,6 +1367,14 @@ void GgdDrumGrid::mouseDown(const juce::MouseEvent& e)
     }
 
     // Select tool
+    if (mods.isPopupMenu())
+    {
+        if (hit.valid() && !isSelected(hit))
+            setSelection({ hit }, true);
+        showContextMenu(e.position);
+        return;
+    }
+
     if (hit.valid())
     {
         if (mods.isShiftDown() && !mods.isAltDown() && !mods.isCommandDown())
@@ -1735,21 +1752,75 @@ void GgdDrumGrid::mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWhe
         return;
     }
 
-    if (viewport == nullptr)
-        return;
+    // Plain scrolling is left to the viewport so it feels native.
+    juce::Component::mouseWheelMove(e, wheel);
+}
 
-    const bool horizontal = e.mods.isShiftDown() || std::abs(wheel.deltaX) > std::abs(wheel.deltaY);
-    if (horizontal)
+void GgdDrumGrid::showContextMenu(juce::Point<float>)
+{
+    const int count = getSelectedCount();
+    const bool any = count > 0;
+    const bool mac = (juce::SystemStats::getOperatingSystemType() & juce::SystemStats::MacOSX) != 0;
+    const juce::String command = mac ? juce::String::fromUTF8("\xe2\x8c\x98") : juce::String("Ctrl+");
+
+    auto item = [](int id, const juce::String& text, const juce::String& keys, bool enabled)
     {
-        const float delta = wheel.deltaX != 0.0f ? wheel.deltaX : wheel.deltaY;
-        viewport->setViewPosition(juce::jmax(0, viewport->getViewPositionX() - static_cast<int>(delta * 220.0f)),
-                                  viewport->getViewPositionY());
-    }
-    else
-    {
-        viewport->setViewPosition(viewport->getViewPositionX(),
-                                  juce::jmax(0, viewport->getViewPositionY() - static_cast<int>(wheel.deltaY * 180.0f)));
-    }
+        juce::PopupMenu::Item entry(text);
+        entry.itemID = id;
+        entry.shortcutKeyDescription = keys;
+        entry.isEnabled = enabled;
+        return entry;
+    };
+
+    juce::PopupMenu chance;
+    const int probability = getSelectedProbability();
+    for (int value : { 25, 50, 75, 100 })
+        chance.addItem(100 + value, juce::String(value) + "%", any, probability == value);
+
+    juce::PopupMenu menu;
+    menu.addSectionHeader(any ? juce::String(count) + (count == 1 ? " hit" : " hits") : juce::String("No selection"));
+    menu.addItem(item(1, "Copy", command + "C", any));
+    menu.addItem(item(2, "Paste", command + "V", !clipboard.empty()));
+    menu.addItem(item(3, "Duplicate", command + "D", any));
+    menu.addItem(item(4, "Delete", "Del", any));
+    menu.addSeparator();
+    menu.addItem(item(5, "Ghost velocity (35)", {}, any));
+    menu.addItem(item(6, "Accent velocity (120)", {}, any));
+    menu.addSubMenu("Chance", chance, any);
+    menu.addSeparator();
+    menu.addItem(item(7, "Quantize", "Q", any));
+    menu.addItem(item(8, "Humanize", {}, any));
+    menu.addItem(item(9, "Flam", {}, any));
+    menu.addItem(item(10, "Double", {}, any));
+    menu.addSeparator();
+    menu.addItem(item(11, "Select all", command + "A", true));
+
+    auto safe = juce::Component::SafePointer<GgdDrumGrid>(this);
+    menu.showMenuAsync(juce::PopupMenu::Options().withMinimumWidth(200).withMousePosition(),
+                       [safe](int result)
+                       {
+                           auto* self = safe.getComponent();
+                           if (self == nullptr || result == 0)
+                               return;
+                           switch (result)
+                           {
+                               case 1: self->copySelection(); break;
+                               case 2: self->pasteClipboard(); break;
+                               case 3: self->duplicateSelection(); break;
+                               case 4: self->deleteSelection(); break;
+                               case 5: self->setSelectedVelocity(35); break;
+                               case 6: self->setSelectedVelocity(120); break;
+                               case 7: self->quantizeSelection(); break;
+                               case 8: self->humanizeSelection(); break;
+                               case 9: self->createFlam(); break;
+                               case 10: self->createDouble(); break;
+                               case 11: self->selectAll(); break;
+                               default:
+                                   if (result > 100)
+                                       self->setSelectedProbability(result - 100);
+                                   break;
+                           }
+                       });
 }
 
 //==============================================================================
@@ -2267,6 +2338,15 @@ void GgdDrumGrid::paintHits(juce::Graphics& g, juce::Rectangle<int> clip, int ti
             }
         }
 
+        const bool editing = (dragMode == DragMode::velocity || dragMode == DragMode::timing
+                              || dragMode == DragMode::selectVelocity)
+                          && ref == dragRef;
+        if (editing && !selected)
+        {
+            g.setColour(tc(GgdThemeRole::accent).withAlpha(0.9f));
+            g.drawRoundedRectangle(body.expanded(2.5f), radius + 2.0f, 1.6f);
+        }
+
         if (selected)
         {
             g.setColour(tc(GgdThemeRole::selection).withAlpha(0.14f));
@@ -2330,6 +2410,29 @@ void GgdDrumGrid::paintDragPreview(juce::Graphics& g)
 
     const float w = hitWidth();
     const int length = patternLengthTicks();
+
+    // The drop is refused if any hit would leave the pattern or land on a
+    // hit that is not moving with it: show that before the mouse is released.
+    bool valid = true;
+    for (const auto& state : dragStates)
+    {
+        const auto it = std::find(visibleRows.begin(), visibleRows.end(), state.ref.row);
+        const int index = it == visibleRows.end() ? -1 : static_cast<int>(it - visibleRows.begin()) + dragDeltaRows;
+        const int tick = state.ref.tick + dragDeltaTicks;
+        if (index < 0 || index >= static_cast<int>(visibleRows.size()) || tick < 0 || tick >= length)
+        {
+            valid = false;
+            break;
+        }
+        const EventRef target { visibleRows[static_cast<size_t>(index)], tick };
+        if (occupied(target.row, target.tick) && (duplicateDrag || !isSelected(target)))
+        {
+            valid = false;
+            break;
+        }
+    }
+    const auto colour = valid ? tc(GgdThemeRole::warm) : tc(GgdThemeRole::danger);
+
     for (const auto& state : dragStates)
     {
         const auto it = std::find(visibleRows.begin(), visibleRows.end(), state.ref.row);
@@ -2343,9 +2446,9 @@ void GgdDrumGrid::paintDragPreview(juce::Graphics& g)
         const float v = static_cast<float>(state.velocity) / 127.0f;
         const float h = 8.0f + 13.0f * v;
         const juce::Rectangle<float> body(hitCentreX(tick) - w * 0.5f, y + rowHeight * 0.5f - h * 0.5f, w, h);
-        g.setColour(tc(GgdThemeRole::warm).withAlpha(0.55f));
+        g.setColour(colour.withAlpha(valid ? 0.55f : 0.35f));
         g.fillRoundedRectangle(body, 4.0f);
-        g.setColour(tc(GgdThemeRole::warm));
+        g.setColour(colour);
         g.drawRoundedRectangle(body.expanded(1.5f), 5.0f, 1.2f);
     }
 }
@@ -2376,38 +2479,86 @@ void GgdDrumGrid::paintPlaybackEffects(juce::Graphics& g, juce::Rectangle<int> c
         const float envelope = 1.0f - progress;
         const float fast = envelope * envelope;
         const float slow = std::sqrt(envelope);
-        const float velocityGain = prefs.velocityReactive ? 0.35f + 0.65f * pulse.velocity / 127.0f : 1.0f;
+        const float velocityGain = prefs.velocityReactive ? 0.30f + 0.70f * pulse.velocity / 127.0f : 1.0f;
         const float gain = juce::jlimit(0.0f, 1.5f, prefs.effectIntensity * velocityGain);
         if (gain <= 0.001f)
             continue;
 
+        // The 1.0.1 effect stack (lane flash, streak, layered bloom, core,
+        // flare and a double ripple), tinted with the instrument colour.
         const auto colour = prefs.colourByInstrument ? item->colour : tc(GgdThemeRole::accent);
+        const auto glow = colour.brighter(0.25f);
+        const auto core = tc(GgdThemeRole::text);
         const float cx = hitCentreX(pulse.tick);
         const float cy = static_cast<float>(item->y) + rowHeight * 0.5f;
-        const float base = juce::jlimit(8.0f, 20.0f, cellWidth() * 0.3f + 7.0f);
+        const float cell = cellWidth();
+        const float base = juce::jlimit(8.0f, 21.0f, cell * 0.30f + 7.0f);
+        const float rowTop = static_cast<float>(item->y);
 
-        if (prefs.playedLaneFlash)
+        if (prefs.playedLaneFlash && visibleRight > visibleLeft)
         {
-            g.setColour(colour.withAlpha(juce::jlimit(0.0f, 0.16f, 0.12f * gain * slow)));
-            g.fillRect(juce::Rectangle<float>(visibleLeft, static_cast<float>(item->y),
-                                              visibleRight - visibleLeft, static_cast<float>(rowHeight - 1)));
+            g.setColour(colour.withAlpha(juce::jlimit(0.0f, 0.20f, 0.15f * gain * slow)));
+            g.fillRect(juce::Rectangle<float>(visibleLeft, rowTop + 1.0f, visibleRight - visibleLeft,
+                                              static_cast<float>(rowHeight - 2)));
+
+            if (cx >= visibleLeft - 80.0f && cx <= visibleRight + 80.0f)
+            {
+                const float streak = juce::jlimit(42.0f, 170.0f, cell * 1.35f + 46.0f + progress * 34.0f);
+                const auto streakArea = juce::Rectangle<float>(cx - streak * 0.5f, rowTop + 3.0f, streak,
+                                                               static_cast<float>(juce::jmax(2, rowHeight - 6)));
+                const auto clipped = streakArea.withLeft(juce::jmax(streakArea.getX(), visibleLeft))
+                                               .withRight(juce::jmin(streakArea.getRight(), visibleRight));
+                g.setColour(glow.withAlpha(juce::jlimit(0.0f, 0.34f, 0.27f * gain * fast)));
+                if (!clipped.isEmpty())
+                    g.fillRoundedRectangle(clipped, 4.0f);
+            }
         }
 
-        if (cx < visibleLeft - 60.0f || cx > visibleRight + 60.0f)
+        if (cx < visibleLeft - 56.0f || cx > visibleRight + 56.0f)
             continue;
 
-        const float bloom = prefs.reduceMotion ? base : base + progress * 12.0f;
-        g.setColour(colour.withAlpha(juce::jlimit(0.0f, 0.30f, 0.24f * gain * envelope)));
-        g.fillEllipse(juce::Rectangle<float>(bloom * 2.0f, bloom * 2.0f).withCentre({ cx, cy }));
-        g.setColour(juce::Colours::white.withAlpha(juce::jlimit(0.0f, 0.55f, 0.45f * gain * fast)));
-        g.fillEllipse(juce::Rectangle<float>(base * 0.8f, base * 0.8f).withCentre({ cx, cy }));
+        const float radius = prefs.reduceMotion ? base : base + progress * 13.0f;
+        const float outer = radius * 1.55f;
+        const float inner = juce::jmax(5.0f, radius * 0.78f);
+        const float ring = juce::jmax(3.5f, base * 0.42f);
+
+        g.setColour(colour.withAlpha(juce::jlimit(0.0f, 0.18f, 0.13f * gain * slow)));
+        g.fillEllipse(juce::Rectangle<float>(outer * 2.0f, outer * 2.0f).withCentre({ cx, cy }));
+        g.setColour(glow.withAlpha(juce::jlimit(0.0f, 0.42f, 0.32f * gain * envelope)));
+        g.fillEllipse(juce::Rectangle<float>(radius * 2.0f, radius * 2.0f).withCentre({ cx, cy }));
+        g.setColour(core.withAlpha(juce::jlimit(0.0f, 0.48f, 0.38f * gain * fast)));
+        g.fillEllipse(juce::Rectangle<float>(inner * 0.92f, inner * 0.92f).withCentre({ cx, cy }));
+        g.setColour(core.withAlpha(juce::jlimit(0.0f, 0.56f, 0.43f * gain * envelope)));
+        g.drawEllipse(juce::Rectangle<float>(ring * 2.0f, ring * 2.0f).withCentre({ cx, cy }),
+                      1.2f + 0.8f * juce::jmin(1.0f, gain));
+
+        if (!prefs.reduceMotion && progress < 0.42f)
+        {
+            // short impact flare
+            const float impact = 1.0f - progress / 0.42f;
+            const float length = base + 8.0f + 13.0f * (1.0f - impact);
+            g.setColour(core.withAlpha(juce::jlimit(0.0f, 0.70f, 0.54f * gain * impact * impact)));
+            g.drawLine(cx - length, cy, cx - ring - 2.0f, cy, 1.4f);
+            g.drawLine(cx + ring + 2.0f, cy, cx + length, cy, 1.4f);
+            g.drawLine(cx, cy - length * 0.62f, cx, cy - ring - 2.0f, 1.15f);
+            g.drawLine(cx, cy + ring + 2.0f, cx, cy + length * 0.62f, 1.15f);
+        }
 
         if (prefs.playedRipple && !prefs.reduceMotion)
         {
-            const float ripple = base + 4.0f + progress * 28.0f;
-            g.setColour(colour.withAlpha(juce::jlimit(0.0f, 0.6f, 0.5f * gain * envelope)));
+            const float ripple = base + 5.0f + progress * 30.0f;
+            g.setColour(colour.withAlpha(juce::jlimit(0.0f, 0.62f, 0.50f * gain * envelope)));
             g.drawEllipse(juce::Rectangle<float>(ripple * 2.0f, ripple * 2.0f).withCentre({ cx, cy }),
-                          1.0f + 1.2f * fast);
+                          1.1f + 1.0f * fast);
+
+            if (progress > 0.16f)
+            {
+                const float late = juce::jlimit(0.0f, 1.0f, (progress - 0.16f) / 0.84f);
+                const float second = base + 3.0f + late * 43.0f;
+                g.setColour(glow.withAlpha(juce::jlimit(0.0f, 0.36f, 0.28f * gain * (1.0f - late))));
+                g.drawEllipse(juce::Rectangle<float>(second * 2.0f, second * 2.0f).withCentre({ cx, cy }),
+                              0.9f + 0.7f * (1.0f - late));
+            }
         }
     }
 }

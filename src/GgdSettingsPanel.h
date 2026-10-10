@@ -106,6 +106,7 @@ private:
     GgdButton resetButton { "Restore defaults" };
     GgdButton doneButton { "Done" };
     GgdButton closeButton { {}, GgdIcon::close };
+    juce::Rectangle<int> feedbackNoteArea;
 
     void setupToggle(juce::ToggleButton& button, const juce::String& text, const juce::String& tooltip,
                      bool GgdPreferences::*field);

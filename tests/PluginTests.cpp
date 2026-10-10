@@ -329,6 +329,27 @@ bool sameEvents(const std::vector<GgdSequenceEvent>& a, const std::vector<GgdSeq
     return true;
 }
 
+juce::MouseEvent mouseAt(juce::Component& component, juce::Point<float> position, juce::Point<float> downAt,
+                        juce::ModifierKeys mods = {}, bool dragged = false)
+{
+    const auto now = juce::Time::getCurrentTime();
+    return juce::MouseEvent(juce::Desktop::getInstance().getMainMouseSource(), position, mods,
+                            juce::MouseInputSource::defaultPressure, juce::MouseInputSource::defaultOrientation,
+                            juce::MouseInputSource::defaultRotation, juce::MouseInputSource::defaultTiltX,
+                            juce::MouseInputSource::defaultTiltY, &component, &component, now, downAt, now, 1,
+                            dragged);
+}
+
+// A complete press-drag-release gesture through the given points.
+void gesture(juce::Component& component, const std::vector<juce::Point<float>>& points, juce::ModifierKeys mods = {})
+{
+    const auto down = points.front();
+    component.mouseDown(mouseAt(component, down, down, mods));
+    for (size_t i = 1; i < points.size(); ++i)
+        component.mouseDrag(mouseAt(component, points[i], down, mods, true));
+    component.mouseUp(mouseAt(component, points.back(), down, mods, points.size() > 1));
+}
+
 // Owns a processor and its editor for editor-level tests.
 struct EditorFixture
 {
@@ -681,6 +702,122 @@ public:
 
 static GgdEditorTests editorTests;
 
+class GgdGridMouseTests final : public juce::UnitTest
+{
+public:
+    GgdGridMouseTests() : juce::UnitTest("Timeline mouse editing", "ggd-plugin") {}
+
+    void runTest() override
+    {
+        constexpr int s = GGD_TICKS_PER_16TH;
+
+        beginTest("A paint stroke adds hits and undoes as one step");
+        {
+            EditorFixture f;
+            auto& grid = f.grid();
+            const int row = f.processor->getProject().findCanonicalRow("tom.rack_1.hit");
+            const int before = f.layer().getEventPattern(0)->getEventCount();
+            std::vector<juce::Point<float>> stroke;
+            for (int tick = 0; tick <= 6 * s; tick += s / 2)
+                stroke.push_back(grid.getCellBounds(row, tick).getCentre());
+            gesture(grid, stroke);
+            expectEquals(f.layer().getEventPattern(0)->getEventCount(), before + 7, "seven cells painted");
+            GgdEditorTestAccess::undo(f.editor());
+            expectEquals(f.layer().getEventPattern(0)->getEventCount(), before, "one undo removes the stroke");
+        }
+
+        beginTest("A fast stroke never skips cells");
+        {
+            EditorFixture f;
+            auto& grid = f.grid();
+            const int row = f.processor->getProject().findCanonicalRow("tom.floor_1.hit");
+            const int before = f.layer().getEventPattern(0)->getEventCount();
+            gesture(grid, { grid.getCellBounds(row, 0).getCentre(), grid.getCellBounds(row, 9 * s).getCentre() });
+            expectEquals(f.layer().getEventPattern(0)->getEventCount(), before + 10);
+        }
+
+        beginTest("Clicking a hit removes it, right-drag erases a run");
+        {
+            EditorFixture f;
+            auto& grid = f.grid();
+            const auto& project = f.processor->getProject();
+            const int hat = project.findCanonicalRow("hihat.tip_closed");
+            const int before = f.layer().getEventPattern(0)->getEventCount();
+            gesture(grid, { grid.getCellBounds(hat, 0).getCentre() });
+            expectEquals(f.layer().getEventPattern(0)->getEventCount(), before - 1);
+
+            gesture(grid, { grid.getCellBounds(hat, 2 * s).getCentre(), grid.getCellBounds(hat, 6 * s).getCentre() },
+                    juce::ModifierKeys(juce::ModifierKeys::rightButtonModifier));
+            expectEquals(f.layer().getEventPattern(0)->getEventCount(), before - 4, "hats at 2, 4 and 6 erased");
+            GgdEditorTestAccess::undo(f.editor());
+            GgdEditorTestAccess::undo(f.editor());
+            expectEquals(f.layer().getEventPattern(0)->getEventCount(), before);
+        }
+
+        beginTest("Shift-drag changes velocity");
+        {
+            EditorFixture f;
+            auto& grid = f.grid();
+            const auto& project = f.processor->getProject();
+            const int kick = project.findCanonicalRow("kick.hit");
+            const auto centre = grid.getCellBounds(kick, 0).getCentre();
+            gesture(grid, { centre, centre.translated(0.0f, 20.0f) },
+                    juce::ModifierKeys(juce::ModifierKeys::shiftModifier | juce::ModifierKeys::leftButtonModifier));
+            const auto* event = f.layer().getEventPattern(0)->findEventPtr(project.storageRowForCanonical(kick), 0);
+            expect(event != nullptr);
+            if (event != nullptr)
+                expectEquals(static_cast<int>(event->velocity), 118 - 16);
+        }
+
+        beginTest("Select tool: box select, then drag to move");
+        {
+            EditorFixture f;
+            auto& grid = f.grid();
+            const auto& project = f.processor->getProject();
+            grid.setToolMode(GgdDrumGrid::ToolMode::select);
+            const int snare = project.findCanonicalRow("snare.hit");
+            const int storage = project.storageRowForCanonical(snare);
+
+            // box around the snare backbeat on beat 2 (tick 4s)
+            const auto cell = grid.getCellBounds(snare, 4 * s);
+            gesture(grid, { cell.getTopLeft().translated(-6.0f, 2.0f), cell.getBottomRight().translated(6.0f, -2.0f) });
+            expectEquals(grid.getSelectedCount(), 1);
+
+            const auto from = cell.getCentre();
+            gesture(grid, { from, from.translated(grid.getCellBounds(snare, 5 * s).getX() - cell.getX(), 0.0f) });
+            expect(f.layer().getEventPattern(0)->findEventPtr(storage, 5 * s) != nullptr, "moved one sixteenth later");
+            expect(f.layer().getEventPattern(0)->findEventPtr(storage, 4 * s) == nullptr);
+            expectEquals(grid.getSelectedCount(), 1);
+
+            // Alt-drag duplicates
+            const auto moved = grid.getCellBounds(snare, 5 * s).getCentre();
+            gesture(grid, { moved, moved.translated(grid.getCellBounds(snare, 6 * s).getX() - grid.getCellBounds(snare, 5 * s).getX(), 0.0f) },
+                    juce::ModifierKeys(juce::ModifierKeys::altModifier | juce::ModifierKeys::leftButtonModifier));
+            expect(f.layer().getEventPattern(0)->findEventPtr(storage, 5 * s) != nullptr, "original stays");
+            expect(f.layer().getEventPattern(0)->findEventPtr(storage, 6 * s) != nullptr, "copy added");
+        }
+
+        beginTest("Clicking a row name auditions its note");
+        {
+            EditorFixture f;
+            auto& grid = f.grid();
+            const auto& project = f.processor->getProject();
+            const int kick = project.findCanonicalRow("kick.hit");
+            const auto cell = grid.getCellBounds(kick, 0);
+            f.processor->mIncomingData.clearFifo();
+            gesture(grid, { juce::Point<float>(40.0f, cell.getCentreY()) });
+            int message = 0, layer = 0, row = 0;
+            expect(f.processor->mIncomingData.readFromFifo(&message, &layer, &row));
+            expectEquals(message, SEQ_MIDI_NOTEON);
+            expectEquals(row, project.storageRowForCanonical(kick));
+            expect(f.processor->mIncomingData.readFromFifo(&message, &layer, &row));
+            expectEquals(message, SEQ_MIDI_NOTEOFF);
+        }
+    }
+};
+
+static GgdGridMouseTests gridMouseTests;
+
 //==============================================================================
 namespace
 {
@@ -834,6 +971,61 @@ int runSnapshotTool(const juce::StringArray& args)
     runner.add([&] { snap(editor, folder, "10-empty-slot"); });
     runner.add([&] { editor.selectPatternSlot(0); });
     runner.add([&] { snap(editor, folder, "11-draw-2x", 2.0f); });
+
+    // Gestures caught mid-way.
+    const auto& project = proc.getProject();
+    const int kickRow = project.findCanonicalRow("kick.hit");
+    const int snareRow = project.findCanonicalRow("snare.hit");
+    const int hatRow = project.findCanonicalRow("hihat.tip_closed");
+    constexpr int s16 = GGD_TICKS_PER_16TH;
+    runner.add([&]
+    {
+        const auto cell = grid.getCellBounds(hatRow, 5 * s16).getCentre();
+        grid.mouseMove(mouseAt(grid, cell, cell));
+        snap(editor, folder, "12-hover-empty-cell");
+        grid.mouseExit(mouseAt(grid, cell, cell));
+    });
+    runner.add([&]
+    {
+        const auto hit = grid.getCellBounds(kickRow, 6 * s16).getCentre();
+        const juce::ModifierKeys shift(juce::ModifierKeys::shiftModifier | juce::ModifierKeys::leftButtonModifier);
+        grid.mouseDown(mouseAt(grid, hit, hit, shift));
+        grid.mouseDrag(mouseAt(grid, hit.translated(0.0f, -14.0f), hit, shift, true));
+        snap(editor, folder, "13-velocity-drag");
+        grid.mouseUp(mouseAt(grid, hit.translated(0.0f, -14.0f), hit, shift, true));
+        GgdEditorTestAccess::undo(editor);
+    });
+    runner.add([&]
+    {
+        grid.setToolMode(GgdDrumGrid::ToolMode::select);
+        const auto start = grid.getCellBounds(kickRow, 3 * s16).getTopLeft().translated(4.0f, 4.0f);
+        const auto end = grid.getCellBounds(hatRow, 9 * s16).getBottomRight();
+        grid.mouseDown(mouseAt(grid, start, start));
+        grid.mouseDrag(mouseAt(grid, end, start, {}, true));
+        snap(editor, folder, "14-marquee");
+        grid.mouseUp(mouseAt(grid, end, start, {}, true));
+    });
+    runner.add([&]
+    {
+        const auto from = grid.getCellBounds(snareRow, 4 * s16).getCentre();
+        const auto to = grid.getCellBounds(snareRow, 6 * s16).getCentre().translated(0.0f, 2.0f);
+        grid.mouseDown(mouseAt(grid, from, from));
+        grid.mouseDrag(mouseAt(grid, to, from, {}, true));
+        snap(editor, folder, "15-move-preview");
+        grid.mouseUp(mouseAt(grid, from, from, {}, true));
+    });
+    runner.add([&]
+    {
+        const auto hit = grid.getCellBounds(hatRow, 4 * s16).getCentre();
+        const juce::ModifierKeys shift(juce::ModifierKeys::shiftModifier | juce::ModifierKeys::leftButtonModifier);
+        grid.mouseDown(mouseAt(grid, hit, hit, shift));
+        grid.mouseDrag(mouseAt(grid, hit.translated(0.0f, 12.0f), hit, shift, true));
+        snap(editor, folder, "16-velocity-chips");
+        grid.mouseUp(mouseAt(grid, hit.translated(0.0f, 12.0f), hit, shift, true));
+        GgdEditorTestAccess::undo(editor);
+        grid.clearSelection();
+        grid.setToolMode(GgdDrumGrid::ToolMode::draw);
+    });
     runner.run();
 
     processor->editorBeingDeleted(base.get());

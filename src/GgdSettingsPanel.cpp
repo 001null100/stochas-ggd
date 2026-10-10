@@ -474,6 +474,15 @@ void GgdSettingsPanel::paint(juce::Graphics& g)
     drawHeading(left, "Editing");
 
     drawHeading(right, "Played-note feedback");
+
+    if (!feedbackNoteArea.isEmpty())
+    {
+        g.setColour(tc(GgdThemeRole::faint));
+        g.setFont(GgdFonts::regular(11.5f));
+        g.drawFittedText("Feedback follows the notes the sequencer really plays: muted hits and hits skipped "
+                         "by their chance setting stay dark. It never affects MIDI timing.",
+                         feedbackNoteArea, juce::Justification::topLeft, 3, 0.95f);
+    }
 }
 
 void GgdSettingsPanel::resized()
@@ -531,6 +540,8 @@ void GgdSettingsPanel::resized()
     auto decayRow = right.removeFromTop(rowHeight + 2);
     decayLabel.setBounds(decayRow.removeFromLeft(78));
     decaySlider.setBounds(decayRow);
+    right.removeFromTop(16);
+    feedbackNoteArea = right.removeFromTop(60);
 }
 
 void GgdSettingsPanel::mouseDown(const juce::MouseEvent& e)

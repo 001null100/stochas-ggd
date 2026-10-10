@@ -1372,8 +1372,11 @@ void GgdDrumEditor::selectPatternSlot(int slot)
     grid->restoreSelectionCoordinates(history[static_cast<size_t>(slot)].committed.selection);
     restoringHistory = false;
 
+    // Messages about the previous slot no longer apply.
+    statusText.clear();
     updateBrowserHighlight();
     refreshAll();
+    repaint(contextArea);
     focusGrid();
 }
 
@@ -1853,8 +1856,12 @@ void GgdDrumEditor::beginMidiDrag(juce::Component* source)
         return;
     }
 
-    if (dragTempFile.existsAsFile())
-        dragTempFile.deleteFile();
+    // Hosts may read a dropped file some time after the drop, so files are
+    // kept for a while and cleaned up on a later drag.
+    const auto staleBefore = juce::Time::getCurrentTime() - juce::RelativeTime::minutes(10);
+    for (const auto& old : folder.findChildFiles(juce::File::findFiles, false, "*.mid"))
+        if (old.getLastModificationTime() < staleBefore)
+            old.deleteFile();
 
     // A readable file name: DAWs name the dropped clip after it.
     auto file = folder.getChildFile(currentPatternFileName() + ".mid");
@@ -1870,23 +1877,12 @@ void GgdDrumEditor::beginMidiDrag(juce::Component* source)
         return;
     }
 
-    dragTempFile = file;
-    auto safe = juce::Component::SafePointer<GgdDrumEditor>(this);
     const bool started = juce::DragAndDropContainer::performExternalDragDropOfFiles(
-        { file.getFullPathName() }, false, source,
-        [safe, file]
-        {
-            // Some hosts read the file after the drop returns; give them a
-            // moment before cleaning up.
-            juce::Timer::callAfterDelay(30000, [file] { file.deleteFile(); });
-            if (auto* self = safe.getComponent())
-                self->dragTempFile = juce::File();
-        });
+        { file.getFullPathName() }, false, source);
 
     if (!started)
     {
         file.deleteFile();
-        dragTempFile = juce::File();
         showStatus("The DAW did not accept a file drag. Use Pattern > Export MIDI file instead.");
         return;
     }

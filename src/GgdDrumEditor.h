@@ -139,7 +139,6 @@ private:
     std::unique_ptr<GgdLibraryBrowser> browser;
     std::unique_ptr<GgdSettingsPanel> settingsPanel;
     std::unique_ptr<juce::FileChooser> chooser;
-    juce::File dragTempFile;
 
     std::array<SlotHistory, SEQ_MAX_PATTERNS> history;
     bool restoringHistory = false;

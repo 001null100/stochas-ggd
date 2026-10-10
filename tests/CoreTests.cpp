@@ -109,6 +109,7 @@ struct Simulation
     int noteOffs = 0;
     std::vector<double> noteOffPpqs;
     std::vector<double> playheadTicks; // tick at each block start
+    double finalPpq = 0.0;             // host position after the last block
 };
 
 struct SimulationSettings
@@ -122,6 +123,7 @@ struct SimulationSettings
     std::function<double(double)> bpmAt = [](double) { return 120.0; };
     std::function<int(int)> blockSize = [](int) { return 512; };
     double ppqJitter = 0.0; // host position noise, in quarters
+    bool stopAtEnd = true;  // false: keep the transport running for a follow-up run
 };
 
 Simulation simulate(GgdEngine& engine,
@@ -189,6 +191,10 @@ Simulation simulate(GgdEngine& engine,
         engine.finishBlock(samples);
         truePpq += samples / samplesPerQuarter;
     }
+    result.finalPpq = truePpq;
+
+    if (!settings.stopAtEnd)
+        return result;
 
     // Flush pending note-offs like a transport stop.
     engine.playbackStopped();
@@ -694,6 +700,52 @@ public:
             // beat into each host bar.
             std::vector<Expected> expected { { 0.0, noteKick }, { 4.5, noteSnare }, { 8.5, noteSnare } };
             const auto problems = compareHits(expected, all.noteOns, sampleTolerance(120.0));
+            expect(problems.isEmpty(), problems);
+        }
+
+        beginTest("Changing the pattern meter while playing keeps hits on their bar positions");
+        {
+            // A 4/4 bar (kicks on every beat, snare on 2&) becomes 3/4 in the
+            // middle of the third host bar, while the host stays in 4/4.
+            Song song({ { 0, 4, 4 } });
+            auto data = makeData(4, 4, 1);
+            auto* pattern = data->getLayer(0)->getEventPattern(0);
+            for (int beat = 0; beat < 4; ++beat)
+                pattern->addEvent(rowKick, beat * 960, 110);
+            pattern->addEvent(rowSnare, 1440, 100);
+
+            GgdEngine engine;
+            SimulationSettings first;
+            first.endPpq = 9.25;
+            first.stopAtEnd = false;
+            const auto before = simulate(engine, *data, song, first);
+
+            std::vector<GgdPatternOps::ParkedHit> parked;
+            expect(GgdPatternOps::changeGeometry(*pattern, 3, 4, 1, parked));
+            expectEquals(static_cast<int>(parked.size()), 1, "the kick on beat 4 is parked");
+
+            SimulationSettings second;
+            second.startPpq = before.finalPpq;
+            second.endPpq = 20.0;
+            const auto after = simulate(engine, *data, song, second);
+
+            std::vector<NoteOn> all = before.noteOns;
+            all.insert(all.end(), after.noteOns.begin(), after.noteOns.end());
+
+            std::vector<Expected> expected;
+            for (int bar = 0; bar < 5; ++bar)
+            {
+                const double start = bar * 4.0;
+                for (int beat = 0; beat < 4; ++beat)
+                {
+                    const double at = start + beat;
+                    const bool threeFour = at > 9.25;
+                    if (!threeFour || beat < 3)
+                        expected.push_back({ at, noteKick });
+                }
+                expected.push_back({ start + 1.5, noteSnare });
+            }
+            const auto problems = compareHits(expected, all, sampleTolerance(120.0));
             expect(problems.isEmpty(), problems);
         }
 

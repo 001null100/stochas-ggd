@@ -418,6 +418,57 @@ public:
             expectEquals(drumLayer(*target).getCurrentPattern(), 2);
         }
 
+        beginTest("Damaged project state never crashes or breaks the drum layer");
+        {
+            auto source = makeProcessor();
+            fillDemoProject(*source);
+            juce::MemoryBlock state;
+            source->getStateInformation(state);
+
+            // Mangle the numbers inside otherwise well-formed state: ticks,
+            // rows, meters and indices out of range, negative, or huge.
+            const auto xml = SeqAudioProcessor::getXmlFromBinary(state.getData(), static_cast<int>(state.getSize()));
+            expect(xml != nullptr);
+            const auto text = xml != nullptr ? xml->toString() : juce::String();
+
+            juce::Random random(1234);
+            for (int round = 0; round < 40; ++round)
+            {
+                juce::String mangled;
+                for (auto c : text)
+                {
+                    if (juce::CharacterFunctions::isDigit(c) && random.nextInt(6) == 0)
+                    {
+                        const int choice = random.nextInt(4);
+                        mangled << (choice == 0 ? juce::String("-") : choice == 1 ? juce::String("99999")
+                                                                                  : juce::String(random.nextInt(10)));
+                    }
+                    else
+                    {
+                        mangled << juce::String::charToString(c);
+                    }
+                }
+
+                juce::MemoryBlock damaged;
+                if (auto parsed = juce::parseXML(mangled))
+                    SeqAudioProcessor::copyXmlToBinary(*parsed, damaged);
+                else
+                    continue;
+
+                auto target = makeProcessor();
+                target->setStateInformation(damaged.getData(), static_cast<int>(damaged.getSize()));
+                auto& layer = drumLayer(*target);
+                for (int slot = 0; slot < SEQ_MAX_PATTERNS; ++slot)
+                {
+                    const auto* pattern = layer.getEventPattern(slot);
+                    expect(pattern->isActive());
+                    for (int i = 0; i < pattern->getEventCount(); ++i)
+                        expect(pattern->getEvent(i)->tick < pattern->getLengthTicks());
+                }
+                expect(target->getProject().getActiveMap(*target->mData.getUISeqData()) != nullptr);
+            }
+        }
+
         beginTest("Long UTF-8 names are cut on a character boundary");
         {
             auto processor = makeProcessor();

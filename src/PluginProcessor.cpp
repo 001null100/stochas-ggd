@@ -84,6 +84,7 @@ SeqAudioProcessor::SeqAudioProcessor()  :
 
 SeqAudioProcessor::~SeqAudioProcessor()
 {
+   cancelPendingUpdate();
 
    resetMiniMidiMap();
 
@@ -975,9 +976,10 @@ void SeqAudioProcessor::processBlock(AudioSampleBuffer& buffer, MidiBuffer& midi
       for (i = 0; i < SEQ_MAX_LAYERS; i++)
          mStocha[i].playbackStopped();
 
-      // also reset automation values      
+      // also reset automation values. the host is told from the message thread
       for (i = 0; i < mAutomationParameters.size(); i++)
-         mAutomationParameters[i]->reset();
+         mAutomationParameters[i]->resetWithoutNotifyingHost();
+      triggerAsyncUpdate();
 
       // also turn off recording mode
       mRecordingMode = false;
@@ -1274,6 +1276,26 @@ void SeqAudioProcessorParameter::reset()
    endChangeGesture();
 }
 
+void SeqAudioProcessorParameter::resetWithoutNotifyingHost()
+{
+   setValue(getDefaultValue());
+}
+
+void SeqAudioProcessorParameter::notifyHostOfReset()
+{
+   // report the current value rather than the default in case the host has
+   // automated the param again since the audio thread reset it
+   beginChangeGesture();
+   sendValueChangedMessageToListeners(getValue());
+   endChangeGesture();
+}
+
+void SeqAudioProcessor::handleAsyncUpdate()
+{
+   for (int i = 0; i < mAutomationParameters.size(); i++)
+      mAutomationParameters[i]->notifyHostOfReset();
+}
+
 //==========implement AutParamNotify ============================
 void SeqAudioProcessor::automationParameterHasChanged(int paramId, int paramValue, int layer)
 {
@@ -1320,6 +1342,7 @@ String SeqAudioProcessor::getTextForAutomationParameterValue(int paramId, int pa
       break;
    case SEQ_AUT_RECORD:
       ret = paramValue == 0 ? "off" : paramValue == 1 ? "on" : "";
+      break;
    case SEQ_AUT_MUTED: // no/yes
       if (paramValue)
          ret = "yes";
@@ -1355,7 +1378,8 @@ int SeqAudioProcessor::parseTextForAutomationParameterValue(int paramId, String 
       }
       break;
    case SEQ_AUT_TRANSPOSE:
-      for (i = 0; i < SEQMIDI_VALUE_TRANSPOSE_MAX; i++) {
+      // transpose ids are 1-based; getTransposeText(0) would read gTranspose[-1]
+      for (i = SEQMIDI_VALUE_TRANSPOSE_MIN; i <= SEQMIDI_VALUE_TRANSPOSE_MAX; i++) {
          if (text.compare(SeqScale::getTransposeText(i)) == 0) {
             res = i;
             break;
@@ -1443,7 +1467,7 @@ float SeqPlaybackParameter::getValueForText(const String & text) const
 {   
    if (text.compare("play") == 0)
       return 1.0f;
-   else if (text.compare("stop"))
+   else if (text.compare("stop") == 0)
       return 0.5f;
    else // manual
       return 0.0f;

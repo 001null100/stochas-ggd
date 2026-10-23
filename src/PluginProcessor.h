@@ -109,6 +109,11 @@ public:
 
    // call this to reset the value to default (ie when playback stops)
    void reset();
+
+   // audio-thread half of reset(): applies the default locally without calling
+   // into the host. follow up with notifyHostOfReset() on the message thread.
+   void resetWithoutNotifyingHost();
+   void notifyHostOfReset();
 };
 
 // special case for playback parameter
@@ -155,7 +160,8 @@ struct MidiRecordEvent {
 
 /**
 */
-class SeqAudioProcessor  : public AudioProcessor, public SeqProcessorNotifierHelper, public AutParamNotify
+class SeqAudioProcessor  : public AudioProcessor, public SeqProcessorNotifierHelper, public AutParamNotify,
+   private AsyncUpdater
 {
    friend class SeqPlaybackParameter;
 
@@ -229,6 +235,9 @@ class SeqAudioProcessor  : public AudioProcessor, public SeqProcessorNotifierHel
    
    juce::Array<SeqAudioProcessorParameter*> mAutomationParameters;
    void addAutParam(SeqAudioProcessorParameter *p);
+   // host notification for automation params reset on the audio thread.
+   // CLAP forbids host param callbacks (eg request_flush) from the audio thread.
+   void handleAsyncUpdate() override;
    float mPPQAdjust;
 #ifdef CUBASE_HACKS
    juce::PluginHostType mHostType;

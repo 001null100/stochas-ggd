@@ -25,21 +25,23 @@ struct GgdPatternSnapshot
     std::vector<GgdPatternHit> hits;
 };
 
+class GgdProject;
+
 class GgdPatternFile
 {
 public:
     static constexpr const char* extension = ".sggdp";
 
-    static GgdPatternSnapshot capture(SequenceLayer& layer,
-                                      const juce::Array<GgdCanonicalRow>& canonicalRows,
-                                      int pattern,
-                                      int numerator = 0,
-                                      int denominator = 0,
-                                      int bars = 0);
+    // Semantic snapshot of one pattern slot (hits keyed by articulation id).
+    static GgdPatternSnapshot capture(const SequenceLayer& layer,
+                                      const GgdProject& project,
+                                      int pattern);
 
+    // Replaces a pattern slot with a snapshot. Hits for articulations that
+    // are unknown to every built-in kit are skipped.
     static void restore(const GgdPatternSnapshot& snapshot,
                         SequenceData& sequence,
-                        const juce::Array<GgdCanonicalRow>& canonicalRows,
+                        const GgdProject& project,
                         int layerIndex,
                         int pattern);
 

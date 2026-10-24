@@ -1,5 +1,6 @@
 #include "GgdLibraryBrowser.h"
 #include "GgdPatternFile.h"
+#include "GgdSettingsPanel.h"
 #include "GgdUiTheme.h"
 
 #include <algorithm>
@@ -7,15 +8,12 @@
 
 namespace
 {
-constexpr juce::uint32 browserBg = 0xff101418;
-constexpr juce::uint32 browserPanel = 0xff171d22;
-constexpr juce::uint32 browserBorder = 0xff2d363f;
-constexpr juce::uint32 browserText = 0xffedf2f5;
-constexpr juce::uint32 browserMuted = 0xff8d99a5;
-constexpr juce::uint32 browserAccent = 0xff70d6c1;
 constexpr int maxFilterResults = 500;
 
-juce::Colour colour(juce::uint32 value) { return ggdLegacyThemeColour(value); }
+juce::Colour tc(GgdThemeRole role)
+{
+    return ggdThemeColour(role);
+}
 
 bool matchesFile(const juce::File& file, bool patterns)
 {
@@ -26,18 +24,49 @@ bool matchesFile(const juce::File& file, bool patterns)
     return file.hasFileExtension("mid;midi");
 }
 
-void collectLibraryFiles(const juce::File& directory,
-                         bool patterns,
-                         std::vector<juce::File>& results)
+void collectLibraryFiles(const juce::File& directory, bool patterns, std::vector<juce::File>& results, int depth = 0)
 {
-    for (const auto& child : directory.findChildFiles(
-             juce::File::findFilesAndDirectories, false, "*"))
+    if (depth > 12)
+        return;
+    for (const auto& child : directory.findChildFiles(juce::File::findFilesAndDirectories, false, "*"))
     {
         if (child.isDirectory())
-            collectLibraryFiles(child, patterns, results);
+            collectLibraryFiles(child, patterns, results, depth + 1);
         else if (matchesFile(child, patterns))
             results.push_back(child);
     }
+}
+
+void paintRowBackground(juce::Graphics& g, int width, int height, bool selected, bool loaded)
+{
+    const auto area = juce::Rectangle<float>(2.0f, 1.0f, static_cast<float>(width - 4), static_cast<float>(height - 2));
+    if (loaded)
+    {
+        g.setColour(tc(GgdThemeRole::accent).withAlpha(0.14f));
+        g.fillRoundedRectangle(area, 5.0f);
+        g.setColour(tc(GgdThemeRole::accent));
+        g.fillRoundedRectangle(area.getX(), area.getY() + 4.0f, 3.0f, area.getHeight() - 8.0f, 1.5f);
+    }
+    else if (selected)
+    {
+        g.setColour(tc(GgdThemeRole::panelSoft));
+        g.fillRoundedRectangle(area, 5.0f);
+    }
+}
+
+// Draws the "LOADED" badge at the right edge and returns its width.
+float paintLoadedBadge(juce::Graphics& g, int width, int height)
+{
+    const auto font = GgdFonts::bold(9.0f);
+    const float textWidth = juce::GlyphArrangement::getStringWidth(font, "LOADED");
+    const juce::Rectangle<float> badge(static_cast<float>(width) - textWidth - 18.0f, height * 0.5f - 8.0f,
+                                       textWidth + 12.0f, 16.0f);
+    g.setColour(tc(GgdThemeRole::accent));
+    g.fillRoundedRectangle(badge, 4.0f);
+    g.setColour(tc(GgdThemeRole::accentText));
+    g.setFont(font);
+    g.drawText("LOADED", badge, juce::Justification::centred, false);
+    return badge.getWidth() + 10.0f;
 }
 
 class FlatRootItem final : public juce::TreeViewItem
@@ -58,10 +87,7 @@ public:
     {
     }
 
-    bool mightContainSubItems() override
-    {
-        return file.isDirectory();
-    }
+    bool mightContainSubItems() override { return file.isDirectory(); }
 
     void itemOpennessChanged(bool isNowOpen) override
     {
@@ -71,9 +97,7 @@ public:
         populated = true;
         std::vector<juce::File> directories;
         std::vector<juce::File> files;
-
-        for (const auto& child : file.findChildFiles(
-                 juce::File::findFilesAndDirectories, false, "*"))
+        for (const auto& child : file.findChildFiles(juce::File::findFilesAndDirectories, false, "*"))
         {
             if (child.isDirectory())
                 directories.push_back(child);
@@ -98,63 +122,42 @@ public:
     {
         const bool directory = file.isDirectory();
         const bool loaded = !directory && isLoaded && isLoaded(file);
-        const bool selected = isSelected();
+        paintRowBackground(g, width, height, isSelected(), loaded);
 
+        auto area = juce::Rectangle<float>(8.0f, 0.0f, static_cast<float>(width - 8), static_cast<float>(height));
         if (loaded)
-        {
-            g.setColour(colour(browserAccent).withAlpha(0.18f));
-            g.fillRoundedRectangle(2.0f, 1.0f, static_cast<float>(width - 4),
-                                   static_cast<float>(height - 2), 4.0f);
-            g.setColour(colour(browserAccent));
-            g.fillRoundedRectangle(2.0f, 3.0f, 3.0f,
-                                   static_cast<float>(height - 6), 1.5f);
-        }
-        else if (selected)
-        {
-            g.setColour(colour(browserAccent).withAlpha(0.10f));
-            g.fillRoundedRectangle(2.0f, 1.0f, static_cast<float>(width - 4),
-                                   static_cast<float>(height - 2), 4.0f);
-            g.setColour(colour(browserAccent).withAlpha(0.72f));
-            g.drawRoundedRectangle(2.5f, 1.5f, static_cast<float>(width - 5),
-                                   static_cast<float>(height - 3), 4.0f, 1.0f);
-        }
+            area.removeFromRight(paintLoadedBadge(g, width, height));
 
-        g.setColour(directory ? colour(browserText).withAlpha(0.94f)
-                              : colour(browserText));
-        g.setFont(juce::Font(directory ? 11.5f : 11.0f,
-                             (directory || loaded) ? juce::Font::bold : juce::Font::plain));
-        const int suffixWidth = loaded ? 58 : 6;
-        g.drawText(file.getFileNameWithoutExtension(),
-                   9, 0, juce::jmax(0, width - suffixWidth - 9), height,
+        const auto icon = area.removeFromLeft(15.0f).withSizeKeepingCentre(14.0f, 14.0f);
+        ggdDrawIcon(g, directory ? GgdIcon::folder : GgdIcon::file, icon,
+                    directory ? tc(GgdThemeRole::muted) : tc(GgdThemeRole::faint), 1.3f);
+        area.removeFromLeft(7.0f);
+
+        g.setColour(loaded || directory ? tc(GgdThemeRole::text) : tc(GgdThemeRole::text).withAlpha(0.9f));
+        g.setFont(directory || loaded ? GgdFonts::medium(12.5f) : GgdFonts::regular(12.5f));
+        g.drawText(directory ? file.getFileName() : file.getFileNameWithoutExtension(), area,
                    juce::Justification::centredLeft, true);
-
-        if (loaded)
-        {
-            g.setColour(colour(browserAccent));
-            g.setFont(juce::Font(9.0f, juce::Font::bold));
-            g.drawText("LOADED", juce::jmax(0, width - 55), 0, 50, height,
-                       juce::Justification::centredRight, false);
-        }
     }
 
     void itemClicked(const juce::MouseEvent&) override
     {
+        if (file.isDirectory())
+            setOpen(!isOpen());
         setSelected(true, true);
     }
 
     void itemDoubleClicked(const juce::MouseEvent&) override
     {
-        if (file.isDirectory())
-        {
-            setOpen(!isOpen());
-            return;
-        }
-
-        if (onOpen)
+        if (!file.isDirectory() && onOpen)
             onOpen(file);
     }
 
-    int getItemHeight() const override { return file.isDirectory() ? 25 : 23; }
+    juce::String getTooltip() override
+    {
+        return file.isDirectory() ? juce::String() : file.getFileName() + "\nDouble-click to load into the current slot";
+    }
+
+    int getItemHeight() const override { return 26; }
 
 private:
     juce::File file;
@@ -170,13 +173,12 @@ public:
     using OpenCallback = std::function<void(const juce::File&)>;
     using LoadedCallback = std::function<bool(const juce::File&)>;
 
-    SearchResultItem(juce::File source, juce::String relative,
-                     OpenCallback callback, LoadedCallback loadedCallback)
-        : file(std::move(source)), display(std::move(relative)),
-          onOpen(std::move(callback)), isLoaded(std::move(loadedCallback))
+    SearchResultItem(juce::File source, juce::String relative, OpenCallback callback, LoadedCallback loadedCallback)
+        : file(std::move(source)), onOpen(std::move(callback)), isLoaded(std::move(loadedCallback))
     {
-        display = display.replaceCharacter('\\', '/');
-        display = display.upToLastOccurrenceOf(".", false, false);
+        relative = relative.replaceCharacter('\\', '/');
+        folder = relative.containsChar('/') ? relative.upToLastOccurrenceOf("/", true, false) : juce::String();
+        name = file.getFileNameWithoutExtension();
     }
 
     bool mightContainSubItems() override { return false; }
@@ -184,43 +186,30 @@ public:
     void paintItem(juce::Graphics& g, int width, int height) override
     {
         const bool loaded = isLoaded && isLoaded(file);
-        if (loaded)
-        {
-            g.setColour(colour(browserAccent).withAlpha(0.18f));
-            g.fillRoundedRectangle(2.0f, 1.0f, static_cast<float>(width - 4),
-                                   static_cast<float>(height - 2), 4.0f);
-            g.setColour(colour(browserAccent));
-            g.fillRoundedRectangle(2.0f, 3.0f, 3.0f,
-                                   static_cast<float>(height - 6), 1.5f);
-        }
-        else if (isSelected())
-        {
-            g.setColour(colour(browserAccent).withAlpha(0.10f));
-            g.fillRoundedRectangle(2.0f, 1.0f, static_cast<float>(width - 4),
-                                   static_cast<float>(height - 2), 4.0f);
-            g.setColour(colour(browserAccent).withAlpha(0.72f));
-            g.drawRoundedRectangle(2.5f, 1.5f, static_cast<float>(width - 5),
-                                   static_cast<float>(height - 3), 4.0f, 1.0f);
-        }
+        paintRowBackground(g, width, height, isSelected(), loaded);
 
-        g.setColour(colour(browserText));
-        g.setFont(juce::Font(10.5f, loaded ? juce::Font::bold : juce::Font::plain));
-        g.drawText(display, 9, 0, juce::jmax(0, width - (loaded ? 62 : 8)), height,
-                   juce::Justification::centredLeft, true);
-
+        auto area = juce::Rectangle<float>(10.0f, 0.0f, static_cast<float>(width - 10), static_cast<float>(height));
         if (loaded)
+            area.removeFromRight(paintLoadedBadge(g, width, height));
+
+        // "folder/sub/" muted, then the file name
+        auto nameFont = loaded ? GgdFonts::medium(12.5f) : GgdFonts::regular(12.5f);
+        auto folderFont = GgdFonts::regular(11.5f);
+        const float nameWidth = juce::GlyphArrangement::getStringWidth(nameFont, name);
+        const float folderWidth = juce::jmin(juce::GlyphArrangement::getStringWidth(folderFont, folder),
+                                             juce::jmax(0.0f, area.getWidth() - nameWidth - 4.0f));
+        if (folderWidth > 12.0f)
         {
-            g.setColour(colour(browserAccent));
-            g.setFont(juce::Font(9.0f, juce::Font::bold));
-            g.drawText("LOADED", juce::jmax(0, width - 55), 0, 50, height,
-                       juce::Justification::centredRight, false);
+            g.setColour(tc(GgdThemeRole::faint));
+            g.setFont(folderFont);
+            g.drawText(folder, area.removeFromLeft(folderWidth), juce::Justification::centredLeft, true);
         }
+        g.setColour(tc(GgdThemeRole::text));
+        g.setFont(nameFont);
+        g.drawText(name, area, juce::Justification::centredLeft, true);
     }
 
-    void itemClicked(const juce::MouseEvent&) override
-    {
-        setSelected(true, true);
-    }
+    void itemClicked(const juce::MouseEvent&) override { setSelected(true, true); }
 
     void itemDoubleClicked(const juce::MouseEvent&) override
     {
@@ -228,43 +217,97 @@ public:
             onOpen(file);
     }
 
-    int getItemHeight() const override { return 24; }
+    juce::String getTooltip() override { return folder + file.getFileName() + "\nDouble-click to load"; }
+
+    int getItemHeight() const override { return 26; }
 
 private:
     juce::File file;
-    juce::String display;
+    juce::String folder;
+    juce::String name;
     OpenCallback onOpen;
     LoadedCallback isLoaded;
 };
 }
 
-class GgdLibraryBrowser::BrowserPane final : public juce::Component,
-                                             private juce::Timer
+//==============================================================================
+class GgdLibraryBrowser::TabButton final : public juce::Button
 {
 public:
-    BrowserPane(juce::PropertiesFile& propertyStore,
-                juce::String propertyKey,
-                bool patternMode)
+    explicit TabButton(const juce::String& name) : juce::Button(name)
+    {
+        setMouseClickGrabsKeyboardFocus(false);
+        setWantsKeyboardFocus(false);
+        setClickingTogglesState(false);
+    }
+
+    void paintButton(juce::Graphics& g, bool highlighted, bool) override
+    {
+        auto area = getLocalBounds().toFloat().reduced(2.0f, 3.0f);
+        const bool on = getToggleState();
+        if (on)
+        {
+            g.setColour(tc(GgdThemeRole::panelSoft));
+            g.fillRoundedRectangle(area, 5.0f);
+            g.setColour(tc(GgdThemeRole::border));
+            g.drawRoundedRectangle(area.reduced(0.5f), 5.0f, 1.0f);
+        }
+        else if (highlighted)
+        {
+            g.setColour(tc(GgdThemeRole::panelRaised));
+            g.fillRoundedRectangle(area, 5.0f);
+        }
+        g.setColour(on ? tc(GgdThemeRole::text) : tc(GgdThemeRole::muted));
+        g.setFont(on ? GgdFonts::semibold(12.5f) : GgdFonts::medium(12.5f));
+        g.drawText(getButtonText(), area, juce::Justification::centred, false);
+    }
+};
+
+//==============================================================================
+struct GgdLibraryBrowser::SharedSettings
+{
+    SharedSettings()
+    {
+        juce::PropertiesFile::Options options;
+        options.applicationName = "Stochas GGD";
+        options.filenameSuffix = "settings";
+        options.folderName = ggdSettingsFolderName();
+        options.osxLibrarySubFolder = "Application Support";
+        options.storageFormat = juce::PropertiesFile::storeAsXML;
+        options.millisecondsBeforeSaving = 500;
+        file = std::make_unique<juce::PropertiesFile>(options);
+    }
+
+    ~SharedSettings() { file->saveIfNeeded(); }
+
+    std::unique_ptr<juce::PropertiesFile> file;
+};
+
+//==============================================================================
+class GgdLibraryBrowser::BrowserPane final : public juce::Component,
+                                             private juce::Timer,
+                                             private juce::ChangeListener
+{
+public:
+    BrowserPane(juce::PropertiesFile& propertyStore, juce::String propertyKey, bool patternMode)
         : properties(propertyStore), key(std::move(propertyKey)), patterns(patternMode)
     {
         root = juce::File(properties.getValue(key));
+        properties.addChangeListener(this);
 
-        chooseButton.setButtonText("Folder");
-        chooseButton.setTooltip(patterns
-            ? "Choose the root folder containing Stochas GGD pattern files"
-            : "Choose the root folder containing GGD MIDI grooves");
-        chooseButton.onClick = [this] { chooseRoot(); };
-        addAndMakeVisible(chooseButton);
+        folderButton.setTooltip(patterns ? "Choose the folder that holds your Stochas GGD patterns"
+                                         : "Choose the folder that holds your GGD MIDI grooves");
+        folderButton.onClick = [this] { chooseRoot(); };
+        addAndMakeVisible(folderButton);
 
-        refreshButton.setButtonText("Refresh");
-        refreshButton.setTooltip("Rescan the library folder and rebuild the search index");
+        refreshButton.setStyle(GgdButton::Style::quiet);
+        refreshButton.setTooltip("Rescan the folder");
         refreshButton.onClick = [this] { refresh(); };
         addAndMakeVisible(refreshButton);
 
         if (patterns)
         {
-            saveButton.setButtonText("Save Pattern");
-            saveButton.setTooltip("Save the current pattern into the pattern library");
+            saveButton.setTooltip("Save the current pattern into this library");
             saveButton.onClick = [this]
             {
                 if (onSave)
@@ -273,24 +316,26 @@ public:
             addAndMakeVisible(saveButton);
         }
 
-        rootLabel.setFont(10.0f);
-        rootLabel.setJustificationType(juce::Justification::centredLeft);
-        addAndMakeVisible(rootLabel);
+        emptyButton.setStyle(GgdButton::Style::primary);
+        emptyButton.onClick = [this] { chooseRoot(); };
+        addChildComponent(emptyButton);
 
-        filterEditor.setTooltip("Filter the cached library by filename or folder path");
+        filterEditor.setTooltip("Filter by file or folder name");
+        filterEditor.setFont(GgdFonts::regular(12.5f));
+        filterEditor.setIndents(28, 0);
+        filterEditor.setJustification(juce::Justification::centredLeft);
         filterEditor.onTextChange = [this]
         {
             stopTimer();
             startTimer(120);
         };
+        filterEditor.onEscapeKey = [this] { filterEditor.clear(); rebuildTree(); };
         addAndMakeVisible(filterEditor);
-
-        emptyLabel.setFont(11.0f);
-        emptyLabel.setJustificationType(juce::Justification::centred);
-        addAndMakeVisible(emptyLabel);
 
         tree.setRootItemVisible(false);
         tree.setDefaultOpenness(false);
+        tree.setIndentSize(16);
+        tree.setWantsKeyboardFocus(false);
         addAndMakeVisible(tree);
 
         applyTheme();
@@ -299,61 +344,86 @@ public:
 
     ~BrowserPane() override
     {
+        properties.removeChangeListener(this);
         stopTimer();
         tree.setRootItem(nullptr);
     }
 
     void applyTheme()
     {
-        rootLabel.setColour(juce::Label::textColourId, colour(browserMuted));
-        emptyLabel.setColour(juce::Label::textColourId, colour(browserMuted));
-        filterEditor.setTextToShowWhenEmpty(patterns ? "Filter patterns..." : "Filter grooves...",
-                                            colour(browserMuted).withAlpha(0.72f));
-        filterEditor.setColour(juce::TextEditor::backgroundColourId, colour(browserBg));
-        filterEditor.setColour(juce::TextEditor::outlineColourId, colour(browserBorder));
-        filterEditor.setColour(juce::TextEditor::focusedOutlineColourId,
-                               colour(browserAccent).withAlpha(0.85f));
-        filterEditor.setColour(juce::TextEditor::textColourId, colour(browserText));
-        tree.setColour(juce::TreeView::backgroundColourId, colour(browserBg));
-        tree.setColour(juce::TreeView::linesColourId, colour(browserBorder).withAlpha(0.62f));
-        tree.setColour(juce::TreeView::dragAndDropIndicatorColourId, colour(browserAccent));
+        filterEditor.setTextToShowWhenEmpty(patterns ? "Filter patterns" : "Filter grooves",
+                                            tc(GgdThemeRole::faint));
+        filterEditor.setColour(juce::TextEditor::backgroundColourId, tc(GgdThemeRole::outside));
+        filterEditor.setColour(juce::TextEditor::outlineColourId, tc(GgdThemeRole::border));
+        filterEditor.setColour(juce::TextEditor::focusedOutlineColourId, tc(GgdThemeRole::accent));
+        filterEditor.setColour(juce::TextEditor::textColourId, tc(GgdThemeRole::text));
+        filterEditor.applyColourToAllText(tc(GgdThemeRole::text));
+        tree.setColour(juce::TreeView::backgroundColourId, tc(GgdThemeRole::panel));
+        tree.setColour(juce::TreeView::linesColourId, juce::Colours::transparentBlack);
+        tree.setColour(juce::TreeView::selectedItemBackgroundColourId, juce::Colours::transparentBlack);
+        tree.setColour(juce::TreeView::dragAndDropIndicatorColourId, tc(GgdThemeRole::accent));
         repaint();
         tree.repaint();
     }
 
     void paint(juce::Graphics& g) override
     {
-        g.fillAll(colour(browserBg));
-        g.setColour(ggdThemeColour(GgdThemeRole::borderStrong).withAlpha(0.52f));
-        g.drawRect(getLocalBounds(), 1);
-        g.setColour(colour(browserPanel));
-        g.fillRect(0, 0, getWidth(), 99);
-        g.setColour(colour(browserBorder).withAlpha(0.90f));
-        g.drawHorizontalLine(98, 0.0f, static_cast<float>(getWidth()));
-        g.setColour(colour(browserAccent).withAlpha(0.24f));
-        g.fillRect(0, 98, getWidth(), 1);
+        g.fillAll(tc(GgdThemeRole::panel));
+
+        // folder caption
+        g.setColour(tc(GgdThemeRole::muted));
+        g.setFont(GgdFonts::regular(11.5f));
+        g.drawText(caption, captionArea, juce::Justification::centredLeft, true);
+
+        if (emptyArea.isEmpty())
+            return;
+
+        auto area = emptyArea;
+        auto iconArea = area.removeFromTop(44).toFloat();
+        ggdDrawIcon(g, patterns ? GgdIcon::file : GgdIcon::folder, iconArea.withSizeKeepingCentre(30.0f, 30.0f),
+                    tc(GgdThemeRole::faint), 1.2f);
+        g.setColour(tc(GgdThemeRole::text));
+        g.setFont(GgdFonts::semibold(13.0f));
+        g.drawText(emptyTitle, area.removeFromTop(22), juce::Justification::centred, true);
+        g.setColour(tc(GgdThemeRole::muted));
+        g.setFont(GgdFonts::regular(12.0f));
+        g.drawFittedText(emptyMessage, area.removeFromTop(40), juce::Justification::centredTop, 3);
+    }
+
+    void paintOverChildren(juce::Graphics& g) override
+    {
+        ggdDrawIcon(g, GgdIcon::search,
+                    filterEditor.getBounds().toFloat().removeFromLeft(28.0f).withSizeKeepingCentre(14.0f, 14.0f),
+                    tc(GgdThemeRole::faint), 1.4f);
     }
 
     void resized() override
     {
-        auto bounds = getLocalBounds().reduced(8);
-        auto buttons = bounds.removeFromTop(29);
-        chooseButton.setBounds(buttons.removeFromLeft(64));
-        buttons.removeFromLeft(5);
-        refreshButton.setBounds(buttons.removeFromLeft(68));
+        auto bounds = getLocalBounds().reduced(12, 8);
+        auto buttons = bounds.removeFromTop(30);
+        folderButton.setBounds(buttons.removeFromLeft(patterns ? 92 : 120));
+        buttons.removeFromLeft(4);
+        refreshButton.setBounds(buttons.removeFromLeft(30));
         if (patterns)
-        {
-            buttons.removeFromLeft(5);
-            saveButton.setBounds(buttons);
-        }
+            saveButton.setBounds(buttons.removeFromRight(juce::jmin(112, buttons.getWidth() - 4)));
 
-        bounds.removeFromTop(3);
-        rootLabel.setBounds(bounds.removeFromTop(21));
-        bounds.removeFromTop(2);
-        filterEditor.setBounds(bounds.removeFromTop(28));
-        bounds.removeFromTop(7);
+        bounds.removeFromTop(6);
+        captionArea = bounds.removeFromTop(18);
+        bounds.removeFromTop(4);
+        filterEditor.setBounds(bounds.removeFromTop(30));
+        bounds.removeFromTop(8);
         tree.setBounds(bounds);
-        emptyLabel.setBounds(bounds.reduced(12));
+
+        if (showingEmptyState)
+        {
+            auto empty = bounds.withSizeKeepingCentre(bounds.getWidth(), 180).withY(bounds.getY() + 40);
+            emptyButton.setBounds(empty.removeFromBottom(32).withSizeKeepingCentre(150, 32));
+            emptyArea = empty;
+        }
+        else
+        {
+            emptyArea = {};
+        }
     }
 
     void setOpenCallback(FileCallback callback)
@@ -362,15 +432,15 @@ public:
         rebuildTree();
     }
 
-    void setSaveCallback(VoidCallback callback)
-    {
-        onSave = std::move(callback);
-    }
+    void setSaveCallback(VoidCallback callback) { onSave = std::move(callback); }
 
     void setLoadedFile(const juce::File& file)
     {
-        loadedFile = file;
-        tree.repaint();
+        if (loadedFile != file)
+        {
+            loadedFile = file;
+            tree.repaint();
+        }
     }
 
     juce::File getRoot() const { return root; }
@@ -386,17 +456,14 @@ public:
         tree.setRootItem(nullptr);
         treeRoot.reset();
 
-        const bool valid = root.isDirectory();
-        if (!valid)
+        if (!root.isDirectory())
         {
-            tree.setVisible(false);
-            emptyLabel.setVisible(true);
-            emptyLabel.setText(patterns
-                ? "Choose a pattern folder to build your library."
-                : "Choose your GGD MIDI groove folder.",
-                juce::dontSendNotification);
-            rootLabel.setText("No folder selected", juce::dontSendNotification);
-            rootLabel.setTooltip(juce::String());
+            setEmptyState(true, patterns ? "No pattern folder yet" : "No groove folder yet",
+                          patterns ? "Choose a folder to keep your saved patterns in. Save Pattern stores the "
+                                     "current pattern there."
+                                   : "Point Stochas GGD at the MIDI folder of your GetGood Drums library.",
+                          "Choose folder...");
+            caption = "No folder chosen";
             return;
         }
 
@@ -408,22 +475,23 @@ public:
         const auto filter = filterEditor.getText().trim();
         if (filter.isEmpty())
         {
-            emptyLabel.setVisible(false);
-            tree.setVisible(true);
-            rootLabel.setText(
-                root.getFileName() + "  |  " + juce::String(static_cast<int>(indexedFiles.size())) + " files",
-                juce::dontSendNotification);
-            rootLabel.setTooltip(root.getFullPathName());
+            if (indexedFiles.empty())
+                setEmptyState(true, patterns ? "No patterns here yet" : "No MIDI files found",
+                              patterns ? "Saved patterns (.sggdp) appear here."
+                                       : "This folder has no .mid files. Choose another folder?",
+                              "Choose folder...");
+            else
+                setEmptyState(false);
+            caption = root.getFileName() + "  ·  " + juce::String(static_cast<int>(indexedFiles.size()))
+                    + (indexedFiles.size() == 1 ? " file" : " files");
             treeRoot = std::make_unique<FileTreeItem>(root, patterns, onOpen, loaded);
             tree.setRootItem(treeRoot.get());
             treeRoot->setOpen(true);
-            tree.repaint();
+            repaint();
             return;
         }
 
         std::vector<juce::File> results;
-        results.reserve(static_cast<size_t>(juce::jmin(
-            maxFilterResults, static_cast<int>(indexedFiles.size()))));
         for (const auto& file : indexedFiles)
         {
             if (static_cast<int>(results.size()) >= maxFilterResults)
@@ -432,31 +500,25 @@ public:
                 results.push_back(file);
         }
 
-        rootLabel.setText(
-            juce::String(static_cast<int>(results.size()))
-                + (results.size() == 1 ? " match  |  " : " matches  |  ")
-                + root.getFileName(),
-            juce::dontSendNotification);
-        rootLabel.setTooltip(root.getFullPathName());
+        caption = juce::String(static_cast<int>(results.size()))
+                + (results.size() == 1 ? " match" : " matches")
+                + (results.size() >= static_cast<size_t>(maxFilterResults) ? " (first 500)" : "");
 
         if (results.empty())
         {
-            tree.setVisible(false);
-            emptyLabel.setVisible(true);
-            emptyLabel.setText("No matches for \"" + filter + "\"", juce::dontSendNotification);
+            setEmptyState(true, "No matches", "Nothing in " + root.getFileName() + " matches \"" + filter + "\".",
+                          {});
             return;
         }
 
-        emptyLabel.setVisible(false);
-        tree.setVisible(true);
+        setEmptyState(false);
         auto flatRoot = std::make_unique<FlatRootItem>();
         for (const auto& file : results)
-            flatRoot->addSubItem(new SearchResultItem(
-                file, file.getRelativePathFrom(root), onOpen, loaded));
+            flatRoot->addSubItem(new SearchResultItem(file, file.getRelativePathFrom(root), onOpen, loaded));
         treeRoot = std::move(flatRoot);
         tree.setRootItem(treeRoot.get());
         treeRoot->setOpen(true);
-        tree.repaint();
+        repaint();
     }
 
 private:
@@ -468,21 +530,52 @@ private:
     FileCallback onOpen;
     VoidCallback onSave;
 
-    juce::TextButton chooseButton;
-    juce::TextButton refreshButton;
-    juce::TextButton saveButton;
-    juce::Label rootLabel;
+    GgdButton folderButton { "Folder", GgdIcon::folder };
+    GgdButton refreshButton { {}, GgdIcon::refresh };
+    GgdButton saveButton { "Save pattern", GgdIcon::save };
+    GgdButton emptyButton { "Choose folder..." };
     juce::TextEditor filterEditor;
-    juce::Label emptyLabel;
     juce::TreeView tree;
     std::unique_ptr<juce::TreeViewItem> treeRoot;
     std::unique_ptr<juce::FileChooser> chooser;
     std::vector<juce::File> indexedFiles;
 
+    juce::String caption;
+    juce::Rectangle<int> captionArea;
+    bool showingEmptyState = false;
+    juce::Rectangle<int> emptyArea;
+    juce::String emptyTitle;
+    juce::String emptyMessage;
+
+    void setEmptyState(bool empty, const juce::String& title = {}, const juce::String& message = {},
+                       const juce::String& buttonText = {})
+    {
+        showingEmptyState = empty;
+        emptyTitle = title;
+        emptyMessage = message;
+        tree.setVisible(!empty);
+        emptyButton.setVisible(empty && buttonText.isNotEmpty());
+        if (buttonText.isNotEmpty())
+            emptyButton.setButtonText(buttonText);
+        resized();
+        repaint();
+    }
+
     void timerCallback() override
     {
         stopTimer();
         rebuildTree();
+    }
+
+    // Another window chose a different folder.
+    void changeListenerCallback(juce::ChangeBroadcaster*) override
+    {
+        const juce::File chosen(properties.getValue(key));
+        if (chosen != root)
+        {
+            root = chosen;
+            refresh();
+        }
     }
 
     void rebuildIndex()
@@ -494,62 +587,91 @@ private:
         collectLibraryFiles(root, patterns, indexedFiles);
         std::sort(indexedFiles.begin(), indexedFiles.end(), [this](const juce::File& a, const juce::File& b)
         {
-            return a.getRelativePathFrom(root).compareNatural(
-                b.getRelativePathFrom(root), true) < 0;
+            return a.getRelativePathFrom(root).compareNatural(b.getRelativePathFrom(root), true) < 0;
         });
     }
 
     void chooseRoot()
     {
         chooser = std::make_unique<juce::FileChooser>(
-            patterns ? "Choose pattern library folder" : "Choose groove library folder",
+            patterns ? "Choose the pattern library folder" : "Choose the groove library folder",
             root.isDirectory() ? root : juce::File::getSpecialLocation(juce::File::userDocumentsDirectory));
 
         auto safe = juce::Component::SafePointer<BrowserPane>(this);
-        chooser->launchAsync(juce::FileBrowserComponent::openMode
-                           | juce::FileBrowserComponent::canSelectDirectories,
-            [safe](const juce::FileChooser& result)
-            {
-                if (auto* self = safe.getComponent())
-                {
-                    const auto chosen = result.getResult();
-                    if (!chosen.isDirectory())
-                        return;
-
-                    self->root = chosen;
-                    self->properties.setValue(self->key, chosen.getFullPathName());
-                    self->properties.saveIfNeeded();
-                    self->refresh();
-                }
-            });
+        chooser->launchAsync(juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectDirectories,
+                             [safe](const juce::FileChooser& result)
+                             {
+                                 if (auto* self = safe.getComponent())
+                                 {
+                                     const auto chosen = result.getResult();
+                                     if (!chosen.isDirectory())
+                                         return;
+                                     self->root = chosen;
+                                     self->properties.setValue(self->key, chosen.getFullPathName());
+                                     self->properties.saveIfNeeded();
+                                     self->refresh();
+                                 }
+                             });
     }
 };
 
+//==============================================================================
 GgdLibraryBrowser::GgdLibraryBrowser()
 {
-    juce::PropertiesFile::Options options;
-    options.applicationName = "Stochas GGD";
-    options.filenameSuffix = "settings";
-    options.folderName = "Stochas GGD";
-    options.osxLibrarySubFolder = "Application Support";
-    options.storageFormat = juce::PropertiesFile::storeAsXML;
-    settings = std::make_unique<juce::PropertiesFile>(options);
+    groovePane = std::make_unique<BrowserPane>(*settings->file, "grooveRoot", false);
+    patternPane = std::make_unique<BrowserPane>(*settings->file, "patternRoot", true);
+    addChildComponent(*groovePane);
+    addChildComponent(*patternPane);
 
-    groovePane = std::make_unique<BrowserPane>(*settings, "grooveRoot", false);
-    patternPane = std::make_unique<BrowserPane>(*settings, "patternRoot", true);
+    grooveTab = std::make_unique<TabButton>("Grooves");
+    patternTab = std::make_unique<TabButton>("Patterns");
+    grooveTab->setTooltip("GGD MIDI grooves. Double-click one to load it into the current slot.");
+    patternTab->setTooltip("Your saved Stochas GGD patterns");
+    grooveTab->onClick = [this] { showTab(0); };
+    patternTab->onClick = [this] { showTab(1); };
+    addAndMakeVisible(*grooveTab);
+    addAndMakeVisible(*patternTab);
 
-    tabs.setColour(juce::TabbedComponent::backgroundColourId, colour(browserBg));
-    tabs.setColour(juce::TabbedComponent::outlineColourId, colour(browserBorder));
-    tabs.addTab("Grooves", colour(browserBg), groovePane.get(), false);
-    tabs.addTab("Patterns", colour(browserBg), patternPane.get(), false);
-    addAndMakeVisible(tabs);
+    showTab(juce::jlimit(0, 1, settings->file->getIntValue("libraryTab", 0)));
 }
 
 GgdLibraryBrowser::~GgdLibraryBrowser() = default;
 
+void GgdLibraryBrowser::showTab(int index)
+{
+    currentTab = juce::jlimit(0, 1, index);
+    grooveTab->setToggleState(currentTab == 0, juce::dontSendNotification);
+    patternTab->setToggleState(currentTab == 1, juce::dontSendNotification);
+    groovePane->setVisible(currentTab == 0);
+    patternPane->setVisible(currentTab == 1);
+    auto& file = *settings->file;
+    if (file.getIntValue("libraryTab", 0) != currentTab)
+        file.setValue("libraryTab", currentTab);
+}
+
+void GgdLibraryBrowser::paint(juce::Graphics& g)
+{
+    g.fillAll(tc(GgdThemeRole::panel));
+    auto header = getLocalBounds().removeFromTop(48);
+    auto title = header.reduced(14, 0);
+    g.setColour(tc(GgdThemeRole::muted));
+    g.setFont(GgdFonts::bold(10.5f));
+    g.drawText("LIBRARY", title.removeFromLeft(70), juce::Justification::centredLeft, false);
+    g.setColour(tc(GgdThemeRole::borderSoft));
+    g.fillRect(0, header.getBottom() - 1, getWidth(), 1);
+}
+
 void GgdLibraryBrowser::resized()
 {
-    tabs.setBounds(getLocalBounds());
+    auto bounds = getLocalBounds();
+    auto header = bounds.removeFromTop(48).reduced(12, 9);
+    header.removeFromLeft(62);
+    auto tabs = header.withSizeKeepingCentre(juce::jmin(header.getWidth(), 200), header.getHeight())
+                    .withRightX(header.getRight());
+    grooveTab->setBounds(tabs.removeFromLeft(tabs.getWidth() / 2));
+    patternTab->setBounds(tabs);
+    groovePane->setBounds(bounds);
+    patternPane->setBounds(bounds);
 }
 
 void GgdLibraryBrowser::setGrooveOpenCallback(FileCallback callback)
@@ -585,18 +707,8 @@ void GgdLibraryBrowser::refresh()
 
 void GgdLibraryBrowser::themeChanged()
 {
-    const int currentTab = tabs.getCurrentTabIndex();
     groovePane->applyTheme();
     patternPane->applyTheme();
-
-    // Rebuild just the tab buttons so their explicit background colours follow
-    // the new palette. Pane objects and library indexes remain untouched.
-    tabs.clearTabs();
-    tabs.setColour(juce::TabbedComponent::backgroundColourId, colour(browserBg));
-    tabs.setColour(juce::TabbedComponent::outlineColourId, colour(browserBorder));
-    tabs.addTab("Grooves", colour(browserBg), groovePane.get(), false);
-    tabs.addTab("Patterns", colour(browserBg), patternPane.get(), false);
-    tabs.setCurrentTabIndex(juce::jlimit(0, 1, currentTab), false);
     repaint();
 }
 

@@ -16,6 +16,7 @@ bool eventLess(const GgdSequenceEvent& a, const GgdSequenceEvent& b)
 GgdEventPattern::GgdEventPattern()
 {
     std::memset(events, 0, sizeof(events));
+    std::memset(parked, 0, sizeof(parked));
 }
 
 void GgdEventPattern::clear(bool keepGeometry)
@@ -29,7 +30,21 @@ void GgdEventPattern::clear(bool keepGeometry)
         denominator = 4;
         bars = 1;
         active = false;
+        parkedCount = 0;
     }
+}
+
+const GgdParkedHit* GgdEventPattern::getParked(int index) const
+{
+    return index >= 0 && index < parkedCount ? &parked[index] : nullptr;
+}
+
+bool GgdEventPattern::addParked(const GgdParkedHit& hit)
+{
+    if (parkedCount >= GGD_MAX_PARKED_HITS)
+        return false;
+    parked[parkedCount++] = hit;
+    return true;
 }
 
 void GgdEventPattern::activate(int newNumerator, int newDenominator, int newBars)
@@ -55,7 +70,9 @@ void GgdEventPattern::setGeometry(int newNumerator, int newDenominator, int newB
             break;
     }
 
-    bars = static_cast<std::int16_t>(std::max(1, std::min(64, newBars)));
+    const int maxBars = std::max(1, std::min(GGD_MAX_PATTERN_BARS,
+                                             GGD_MAX_PATTERN_TICKS / barTicksFor(numerator, denominator)));
+    bars = static_cast<std::int16_t>(std::max(1, std::min(maxBars, newBars)));
     active = true;
 
     const int length = getLengthTicks();
@@ -71,13 +88,18 @@ void GgdEventPattern::setGeometry(int newNumerator, int newDenominator, int newB
     eventCount = write;
 }
 
-int GgdEventPattern::getLengthTicks() const
+int GgdEventPattern::barTicksFor(int numerator, int denominator)
 {
     const std::int64_t ticksPerBar = static_cast<std::int64_t>(GGD_EVENT_PPQ)
-                                   * static_cast<std::int64_t>(numerator)
+                                   * static_cast<std::int64_t>(std::max(1, numerator))
                                    * 4
-                                   / std::max(1, static_cast<int>(denominator));
-    return static_cast<int>(std::max<std::int64_t>(1, ticksPerBar * bars));
+                                   / std::max(1, denominator);
+    return static_cast<int>(std::max<std::int64_t>(1, ticksPerBar));
+}
+
+int GgdEventPattern::getLengthTicks() const
+{
+    return std::max(1, getBarTicks() * std::max(1, static_cast<int>(bars)));
 }
 
 const GgdSequenceEvent* GgdEventPattern::getEvent(int index) const

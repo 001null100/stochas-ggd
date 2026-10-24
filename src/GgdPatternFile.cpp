@@ -1,28 +1,11 @@
 #include "GgdPatternFile.h"
+#include "GgdProject.h"
 
 #include <algorithm>
 #include <cmath>
 
 namespace
 {
-int activeStorageRowCount(int canonicalCount)
-{
-    return juce::jlimit(SEQ_MIN_ROWS, SEQ_MAX_ROWS, canonicalCount);
-}
-
-int storageRowForCanonical(int canonicalRow, int canonicalCount)
-{
-    const int rowCount = activeStorageRowCount(canonicalCount);
-    return (SEQ_MAX_ROWS - rowCount) + canonicalRow;
-}
-
-int canonicalRowForStorage(int storageRow, int canonicalCount)
-{
-    const int first = SEQ_MAX_ROWS - activeStorageRowCount(canonicalCount);
-    const int canonical = storageRow - first;
-    return canonical >= 0 && canonical < canonicalCount ? canonical : -1;
-}
-
 juce::var hitToVar(const GgdPatternHit& hit)
 {
     auto* object = new juce::DynamicObject();
@@ -40,12 +23,16 @@ bool varToHitV2(const juce::var& value, GgdPatternHit& hit)
     if (object == nullptr)
         return false;
 
+    auto intProperty = [object](const char* name, int fallback)
+    {
+        return object->hasProperty(name) ? static_cast<int>(object->getProperty(name)) : fallback;
+    };
+
     hit.semanticId = object->getProperty("semantic").toString().trim();
-    hit.tick = juce::jmax(0, static_cast<int>(object->getProperty("tick")));
-    hit.durationTicks = juce::jlimit(
-        1, 65535, static_cast<int>(object->getProperty("duration")));
-    hit.velocity = juce::jlimit(1, 127, static_cast<int>(object->getProperty("velocity")));
-    hit.probability = juce::jlimit(0, 100, static_cast<int>(object->getProperty("probability")));
+    hit.tick = juce::jmax(0, intProperty("tick", 0));
+    hit.durationTicks = juce::jlimit(1, 65535, intProperty("duration", GGD_DEFAULT_EVENT_DURATION_TICKS));
+    hit.velocity = juce::jlimit(1, 127, intProperty("velocity", 100));
+    hit.probability = juce::jlimit(0, 100, intProperty("probability", SEQ_PROB_ON));
     return hit.semanticId.isNotEmpty();
 }
 
@@ -99,47 +86,28 @@ void appendLegacyHit(const juce::var& value, std::vector<GgdPatternHit>& output)
 }
 }
 
-GgdPatternSnapshot GgdPatternFile::capture(
-    SequenceLayer& layer,
-    const juce::Array<GgdCanonicalRow>& canonicalRows,
-    int pattern,
-    int numerator,
-    int denominator,
-    int bars)
+GgdPatternSnapshot GgdPatternFile::capture(const SequenceLayer& layer,
+                                           const GgdProject& project,
+                                           int pattern)
 {
-    auto* events = layer.getEventPattern(pattern);
-    if (!events->isActive())
-    {
-        const int fallbackNumerator = numerator > 0 ? numerator : 4;
-        const int fallbackDenominator = denominator > 0 ? denominator : 4;
-        const int fallbackBars = bars > 0 ? bars : 1;
-        layer.migrateLegacyPatternToEvents(
-            pattern, fallbackNumerator, fallbackDenominator, fallbackBars);
-        events = layer.getEventPattern(pattern);
-    }
+    const auto* events = layer.getEventPattern(pattern);
+    const auto& canonicalRows = project.getCanonicalRows();
 
     GgdPatternSnapshot snapshot;
-    snapshot.name = layer.getPatternName(pattern);
+    snapshot.name = juce::String::fromUTF8(layer.getPatternName(pattern));
+    snapshot.ppq = GGD_EVENT_PPQ;
+    if (!events->isActive())
+        return snapshot;
+
     snapshot.numerator = events->getNumerator();
     snapshot.denominator = events->getDenominator();
     snapshot.bars = events->getBars();
-    snapshot.ppq = GGD_EVENT_PPQ;
-
-    if (numerator > 0)
-        snapshot.numerator = numerator;
-    if (denominator > 0)
-        snapshot.denominator = denominator;
-    if (bars > 0)
-        snapshot.bars = bars;
-
     snapshot.hits.reserve(static_cast<size_t>(events->getEventCount()));
+
     for (int index = 0; index < events->getEventCount(); ++index)
     {
         const auto* event = events->getEvent(index);
-        if (event == nullptr)
-            continue;
-
-        const int canonicalRow = canonicalRowForStorage(event->row, canonicalRows.size());
+        const int canonicalRow = project.canonicalRowForStorage(event->row);
         if (canonicalRow < 0)
             continue;
 
@@ -155,12 +123,11 @@ GgdPatternSnapshot GgdPatternFile::capture(
     return snapshot;
 }
 
-void GgdPatternFile::restore(
-    const GgdPatternSnapshot& snapshot,
-    SequenceData& sequence,
-    const juce::Array<GgdCanonicalRow>& canonicalRows,
-    int layerIndex,
-    int pattern)
+void GgdPatternFile::restore(const GgdPatternSnapshot& snapshot,
+                             SequenceData& sequence,
+                             const GgdProject& project,
+                             int layerIndex,
+                             int pattern)
 {
     auto* layer = sequence.getLayer(layerIndex);
     sequence.clearPattern(layerIndex, pattern);
@@ -171,12 +138,11 @@ void GgdPatternFile::restore(
 
     for (const auto& hit : snapshot.hits)
     {
-        const int canonicalRow = GgdKitMapLibrary::findCanonicalRow(canonicalRows, hit.semanticId);
+        const int canonicalRow = project.findCanonicalRow(hit.semanticId);
         if (canonicalRow < 0 || hit.tick < 0 || hit.tick >= lengthTicks)
             continue;
 
-        const int storageRow = storageRowForCanonical(canonicalRow, canonicalRows.size());
-        events->addEvent(storageRow,
+        events->addEvent(project.storageRowForCanonical(canonicalRow),
                          hit.tick,
                          juce::jlimit(1, 127, hit.velocity),
                          juce::jlimit(0, 100, hit.probability),

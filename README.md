@@ -1,192 +1,203 @@
 # Stochas GGD
 
-A Windows-first CLAP note-effect drum sequencer for programming GetGood Drums patterns directly in Bitwig Studio.
+A drum sequencer plug-in (CLAP note effect) for programming GetGood Drums patterns directly in your DAW. It is developed and tested mainly in Bitwig Studio on Windows.
 
 **Signal chain:**
 
 `Stochas GGD -> Kontakt / GGD -> audio`
 
-Stochas GGD started from the open-source Stochas sequencer engine, but the active workflow is purpose-built around semantic GGD articulations, an event timeline, groove/pattern libraries and fast drum editing.
+Stochas GGD started from the open-source Stochas sequencer. The current product is built around semantic GGD articulations, an event timeline, groove and pattern libraries, and fast drum editing.
+
+**New in 2.0:** time-signature changes no longer throw patterns off the bar grid, plus a rebuilt editor and a new look. See [RELEASE_NOTES.md](RELEASE_NOTES.md).
 
 ## Download
 
-Use the **Releases** page in this repository. Versioned releases publish:
+Use the **Releases** page of this repository. Each release publishes:
 
 - `Stochas.GGD.clap` for direct installation
 - `Stochas-GGD-<version>-Windows-x64.zip`
 
-The plugin is developed and tested primarily as a **CLAP note effect in Bitwig on Windows**.
+## Features
 
-## Core features
+- Event-based drum patterns at **960 PPQ**: straight, triplet and off-grid hits side by side.
+- Eight pattern slots, each with its own time signature (1-32 over 2, 4, 8 or 16) and bar count.
+- **Host-bar sync:** every pattern bar starts on a host bar line, so host time-signature changes never shift the groove. *Free run* is available for polymeter.
+- Meter and bar changes keep hits in their bars. Hits that don't fit are hidden (and saved with the project) and come back if the pattern grows again.
+- Semantic storage: hits are stored as articulations (`snare.hit`, `hihat.open_2`...) and the active kit map decides the MIDI note.
+- Built-in maps for GGD **P V**, **P IV** and **Modern & Massive**. The grid shows only the active kit's articulations, in its own order.
+- A **Drum machine** kit for any other instrument: up to 32 pads that you name and map to notes yourself (16 pads on C1 - D#2 to start), saved with the project.
+- Draw and Select tools: paint, erase, box select, move, duplicate, nudge, velocity and timing editing.
+- Ghost, Accent, chance (probability), Quantize, Humanize, Flam and Double, plus ramps, dynamics, fill, mirror, thin and row selection.
+- Undo/redo per pattern slot that also restores the selection.
+- GGD MIDI groove import with velocity and performance timing kept; native `.sggdp` pattern files that move between kits.
+- Grooves and Patterns library with live filtering.
+- Native **MIDI drag-out** of the current pattern, plus MIDI file export.
+- Live MIDI passthrough and a per-project **Seq On / Seq Off** switch.
+- Smooth playhead, follow scrolling for long patterns, and played-note feedback driven by the notes the engine actually plays.
+- Four themes: Graphite, Midnight, Ember and Contrast.
 
-- Event-based drum patterns at **960 PPQ** internal resolution.
-- Independent straight and triplet hits.
-- Zoom-aware straight and triplet editing grids.
-- Per-pattern bar count and time signature across eight pattern slots.
-- Smooth interpolated playhead with optional glow and centre-follow navigation.
-- Follow scrolling only activates when the musical timeline is wider than the visible canvas.
-- Live MIDI passthrough so the downstream GGD instrument remains playable.
-- Project-persistent **SEQ ON / SEQ OFF** for muting generated pattern notes while leaving Bitwig/live MIDI passthrough active.
-- Semantic articulation storage translated through the active GGD kit map.
-- Active-kit row layouts only show articulations that exist in that library, in that library's own order.
-- Click articulation names to audition mapped notes through the downstream instrument.
-- High-resolution GGD MIDI groove import with velocity and performance timing retained.
-- Native `.sggdp` semantic pattern files portable between supported GGD libraries.
-- Grooves and Patterns browser with persistent roots and live filtering.
-- Draw and Select tools, marquee selection, copy/paste, move, duplicate, nudge, velocity and timing editing.
-- Cell-centred hit presentation with cell-based Draw targeting.
-- Resolution-independent right-click erase.
-- Interpolated paint drag so fast gestures do not skip subdivisions.
-- Shift-drag velocity editing and Alt-drag free timing editing.
-- Live velocity/timing value bubbles, including multi-note velocity feedback.
-- Alt-double-click quantize for a single hit.
-- Ghost, Accent, Humanize, Flam and Double actions.
-- Rows / Fill / Mirror / Ramp+ / Ramp- / Dyn- / Thin / Dyn+ selection transforms.
-- Per-hit probability presets.
-- Undo/redo restores both pattern state and the corresponding selection.
-- Native MIDI drag-out for dropping the current pattern directly into Bitwig.
-- File-based MIDI export remains available from the Pattern menu as a fallback.
-- Played-note glow, ripple and lane feedback driven by notes the engine actually schedules.
-- Four persistent UI themes and an expanded Settings panel.
+## Setup in Bitwig
 
-## Built-in GGD mappings
+1. Put `Stochas.GGD.clap` where Bitwig scans for CLAP plug-ins (on Windows `C:\Program Files\Common Files\CLAP\`).
+2. Add Stochas GGD as a **Note FX** before Kontakt / your GGD instrument.
+3. Pick the matching kit in the toolbar (P V, P IV or Modern & Massive), or *Drum machine* for any other drum instrument (see below).
+4. Draw a pattern or double-click a groove in the library, then start the transport.
 
-Current built-in mappings cover:
+Stochas GGD sends mapped notes to the instrument and passes your own MIDI (controllers, clips) through.
 
-- GetGood Drums **P V**
-- GetGood Drums **P IV**
-- GetGood Drums **Modern & Massive**
+## The window
 
-Patterns are stored semantically. A kick event is stored as a kick articulation rather than only as a destination MIDI note. Switching kit maps changes destination bindings without rewriting the musical pattern.
+- **Header:** pattern slots 1-8, the pattern name, the *Pattern* menu, the transport display (bar.beat and host meter), *Seq On/Off*, *Drag MIDI*, the library toggle and settings.
+- **Toolbar:** Draw/Select, undo/redo, meter, bars, grid, zoom, kit and sync mode.
+- **Timeline:** articulation rows grouped by instrument. Click a group header to fold it; click a row name to audition its note. With the Drum machine kit, double-click a row name to rename that pad.
+- **Context strip:** tools for the current selection, or the mouse gestures of the current tool.
+- **Library:** grooves (`.mid`) and patterns (`.sggdp`).
 
-The visible grid belongs to the active kit. P V therefore only displays the instruments and articulations present in P V, while P IV and Modern & Massive retain their own group structure and ordering. Stable canonical storage indices remain unchanged underneath this presentation layer.
+## Drum machine kit
 
-## Basic Bitwig setup
+Choose **Drum machine** in the kit selector to drive a drum machine, sampler or any instrument that isn't a GGD library. It starts with 16 pads on **C1 - D#2** (MIDI 36-51, middle C = C3 as in Bitwig and Ableton), the layout most pad controllers and drum racks use.
 
-1. Put `Stochas.GGD.clap` somewhere Bitwig scans for CLAP plugins.
-2. Add Stochas GGD as a **Note FX** device before Kontakt / your GGD instrument.
-3. Choose the matching GGD kit mapping in Stochas GGD.
-4. Draw or load a groove and start playback.
+Click **Pads** next to the kit selector (or double-click a row name) to open the pad sheet:
 
-The plugin outputs mapped MIDI notes to the downstream instrument and passes live controller/timeline MIDI through.
+- **Name** each pad (*Kick*, *Rim*, *Closed hat*...). Empty names show as *Pad 1*, *Pad 2*... Press Return to move to the next pad.
+- **Note:** pick the MIDI note the pad sends, any note from 0 to 127.
+- **Pads:** 1 to 32. Pads you add continue up the keyboard from the last one. Removing pads hides their rows but keeps their hits, so they come back if you add the pads again.
+- **Play** auditions the pad; **Reset to C1 - D#2** goes back to the 16 default pads.
 
-## Editing workflow
+Changes apply immediately, also while playing, and are saved with the project. Pads are addressed by number (`pad.01`...`pad.32`), so `.sggdp` pattern files move between projects that number their pads the same way. MIDI grooves imported into the Drum machine kit are placed by note number: a note lands on the pad that sends that note; other notes are reported as unresolved.
 
-In **Draw** mode, the visible space between timing lines is treated as a grid cell. Clicking inside a cell edits the event on that cell's leading musical timestamp while the note body is drawn visually in the middle of the cell.
+## Time signatures and sync
 
-Dragging paints every crossed subdivision. Right-click is always destructive and can erase actual hit bodies regardless of the currently selected straight/triplet lattice.
+Each slot has its own meter and bar count. Change them in the toolbar; hits keep their bar and their position in the bar. If a hit no longer fits (a 4/4 bar becomes 3/4, or bars are removed), it is hidden rather than deleted. The toolbar shows how many are hidden, and they come back when the pattern grows again. Undo works across all of this.
 
-In **Select** mode:
+*Sync* (per project) decides how patterns line up with the host:
 
-- Shift-click toggles a hit in the selection.
-- Shift-drag adjusts velocity.
-- When several hits are selected, relative velocity differences are preserved and each affected hit displays its live velocity during the gesture.
-- Alt-drag moves timing freely in ticks and displays signed timing offset.
-- Alt-double-click quantizes one hit to the nearest active subdivision.
-- Undo and redo restore the selection belonging to the historical pattern state.
+- **Host bars** (default): bar 1 of the pattern starts on a host bar line, and multi-bar patterns follow the host's bar number. When the host changes meter, the next host bar simply starts the next pattern bar. If a pattern bar is shorter than the host bar it rests until the next bar line; if it is longer it is cut short. The transport display warns when the meters differ.
+- **Free run**: the pattern loops on its own from the song start, regardless of host bar lines. Use it for deliberate polymeter. This is how 1.x behaved.
 
-### Selection transforms
+## Editing
 
-The context strip focuses on operations that are awkward to reproduce manually:
+### Draw tool
 
-- **Rows**: select all hits on the instrument rows represented by the current selection.
-- **Fill**: fill missing current-grid subdivisions between selected endpoints.
-- **Mirror**: reflect selected timing around the temporal centre of the selection.
-- **Ramp+ / Ramp-**: create rising or falling velocity contours.
-- **Dyn- / Dyn+**: compress or expand velocity differences around the selection average.
-- **Thin**: remove every second selected event independently on each selected articulation row.
+| Gesture | Action |
+| --- | --- |
+| Click an empty cell | Add a hit |
+| Drag | Paint every cell you cross |
+| Click a hit / drag from a hit | Remove it / erase along the row |
+| Right-drag | Erase |
+| Shift-drag a hit | Velocity |
+| Alt-drag a hit | Timing, in ticks (off the grid) |
+| Alt-double-click a hit | Snap it to the grid |
 
-Copy/paste is the phrase repetition workflow: `C` copies the current selection and `V` pastes after it. The pasted copy becomes the new selection so repeated `V` presses chain naturally.
+### Select tool
 
-## Playhead and navigation
+| Gesture | Action |
+| --- | --- |
+| Drag on empty space | Box select (Shift or Ctrl adds) |
+| Click / Ctrl-click a hit | Select / toggle |
+| Drag the selection | Move (Alt-drag duplicates) |
+| Shift-click a hit | Add it to or remove it from the selection |
+| Shift-drag a hit | Velocity of the whole selection |
+| Right-click | Context menu |
 
-With playhead following enabled, only horizontal timeline scrolling follows playback. Vertical articulation scrolling is preserved.
+A move preview turns red if the drop would land on another hit or leave the pattern.
 
-If the complete musical timeline already fits inside the visible timeline canvas, following is disabled because there is nothing useful to scroll. Once the timeline exceeds the viewport, playback is kept around the visible timeline centre, with the normal left-edge constraint at the start of the pattern.
+### Keyboard
 
-Smooth mode reconstructs visual movement between coarse host position notifications at a higher UI update cadence. This only affects presentation.
+| Keys | Action |
+| --- | --- |
+| D / S | Draw / Select tool |
+| Ctrl+Z, Ctrl+Shift+Z or Ctrl+Y | Undo, redo (Z and Y alone also work) |
+| Ctrl+A | Select all |
+| Ctrl+C, Ctrl+V | Copy; paste after the selection (repeat V to chain) |
+| Ctrl+D | Duplicate the selection after itself |
+| Q | Quantize the selection |
+| Delete / Backspace | Delete the selection |
+| Esc | Clear the selection |
+| Arrows | Move the selection one grid step or one row |
+| Alt+Arrows | Duplicate one step or row over |
+| Shift+Up / Shift+Down | Velocity +5 / -5 |
+| Shift+Left / Shift+Right | Timing -10 / +10 ticks |
+| Ctrl+mouse wheel | Zoom |
+
+On macOS use Cmd instead of Ctrl.
+
+### Grid and zoom
+
+The grid (1/8, 1/16, 1/32, 1/8T, 1/16T, 1/32T) controls painting, nudging and quantize. It never changes stored positions. With *Finer grid when zoomed in* on, the grid halves at 350% zoom. Zoom with the slider, Ctrl+wheel or a trackpad pinch; *Fit* shows the whole pattern.
+
+## Pattern slots
+
+Click a slot to edit it; this also makes it the pattern that plays (pattern automation can still override it). Dots mark slots with content; a bar under a slot shows the one the engine is playing. Right-click a slot to open it, copy the current pattern into it, or clear it. Each slot keeps its own undo history while the window is open.
+
+The *Pattern* menu has: duplicate to an empty slot, double length, save to the pattern library, import a MIDI groove, export a MIDI file, and clear.
 
 ## MIDI import, drag-out and export
 
-MIDI import maps source notes to semantic articulations and retains event timing and velocity on the 960 PPQ timeline.
+Imported grooves are mapped to semantic articulations and keep their timing and velocity at 960 PPQ. With the Drum machine kit, notes go to the pad with the same note. Loading a groove or pattern replaces the current slot and can be undone.
 
-The permanent top-bar MIDI action is **Drag MIDI**. Begin dragging from it and Stochas GGD generates a temporary high-resolution `.mid` file using the active GGD destination map, then starts a native Windows file drag. This workflow is confirmed working for dropping patterns into Bitwig.
+Drag from **Drag MIDI** to drop the current pattern into your DAW as a MIDI clip, written with the active kit's notes. Once the clip is on the timeline, switch **Seq Off** so the internal pattern doesn't double it; your MIDI still passes through. *Pattern > Export MIDI file* is the fallback.
 
-Once a dragged clip is placed on the Bitwig timeline, use **SEQ OFF** to prevent the internal pattern from doubling the timeline clip. Incoming/timeline MIDI continues to pass through to the downstream drum instrument.
-
-A conventional **Export MIDI file...** command remains under the Pattern menu as a fallback.
-
-**Probability is not written to ordinary MIDI files.** Standard MIDI note events have no native probability property, so exported or dragged MIDI contains every mapped hit. Probability remains part of the native Stochas GGD pattern.
+**Chance (probability) is not written to MIDI files.** Standard MIDI has no probability field, so exported or dragged MIDI contains every mapped hit.
 
 ## Played-note feedback
 
-Playback effects are driven by compact notifications from events that were actually scheduled by the sequencer. Probability-skipped and muted hits therefore do not flash falsely.
-
-Available effects include:
-
-- played-hit glow
-- expanding ripple
-- articulation-lane flash
-- velocity-reactive intensity
-- configurable strength and decay
-- Reduce Motion
-
-The notification path is bounded and lock-free. Animation remains on the UI thread and cannot block MIDI scheduling.
+Hits light up as the sequencer plays them: lane flash, streak, bloom, impact flare and ripples, tinted by instrument. Feedback follows the notes that were really scheduled, so muted hits and hits skipped by their chance setting stay dark. Strength, decay and each effect can be set in Settings, and *Reduce motion* keeps the feedback static.
 
 ## Settings
 
-The compact `...` button opens the in-plugin Settings panel. Editor preferences are local workstation settings and do not modify pattern data.
+The gear button opens Settings. Preferences belong to the computer and apply to every Stochas GGD window:
 
-Available options include:
+- Theme (Graphite, Midnight, Ember, Contrast) and colour-by-instrument
+- Follow the playhead, smooth playhead motion, playhead glow
+- Finer grid when zoomed in, Shift to inspect velocity, click a row name to audition
+- Played-note feedback: on/off, ripple, lane flash, scale with velocity, reduce motion, strength and decay
 
-- Theme: Graphite, Midnight, Ember or Contrast.
-- Centre-follow playhead navigation.
-- Smooth playhead interpolation.
-- Playhead forward glow.
-- Automatically use a finer grid at high zoom.
-- Shift-hover velocity inspection.
-- Articulation-name audition.
-- Played-hit feedback enable/disable.
-- Hit ripple.
-- Lane flash.
-- Velocity-reactive effect intensity.
-- Effect strength.
-- Effect decay.
-- Reduce Motion.
+Sync mode and Seq On/Off are saved with each project.
 
-Settings apply live and can be closed with **Done**, **Escape**, or by clicking outside the panel.
+## Libraries
 
-## Pattern and groove libraries
+The library panel has two tabs, **Grooves** (`.mid`, `.midi`) and **Patterns** (`.sggdp`), each with its own root folder, remembered on this computer. Double-click a file to load it into the current slot. The filter matches file and folder names. Hide the panel with the folder button in the header.
 
-The right-side browser has separate roots for:
+## Building
 
-- **Grooves:** `.mid` / `.midi`
-- **Patterns:** `.sggdp`
+Clone with submodules first:
 
-Folder locations are remembered locally. Double-click a file to load it. The filter searches filenames and relative paths.
+```
+git submodule update --init --recursive
+```
 
-## Release status
-
-`v1.0.0` is the first full release. Native MIDI drag-out has been validated in Bitwig, and the final stabilization pass adds output muting, played-note feedback, expanded configuration and targeted inherited-state fixes without redesigning the proven host-PPQ scheduling model.
-
-A rare experimental GGD Groove Player source pitch (`85`) remains intentionally unresolved rather than being assigned to an uncertain semantic articulation.
-
-## Building on Windows
-
-Clone with submodules, then build the CLAP target:
+Windows (Visual Studio developer prompt):
 
 ```powershell
-git submodule update --init --recursive
-cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DSTOCHAS_VERSION=1.0.0
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build --target stochas_CLAP --parallel
 ```
 
-The GitHub Actions workflows in `.github/workflows/` build the same Windows CLAP target for pull requests and versioned releases.
+Linux needs the usual JUCE dependencies (ALSA, JACK, FreeType, fontconfig, X11 development packages):
+
+```bash
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake --build build --target stochas_CLAP stochas_VST3 stochas_Standalone
+```
+
+### Tests and snapshots
+
+```bash
+cmake -S . -B build -G Ninja -DSTOCHAS_BUILD_TESTS=ON
+cmake --build build --target stochas_tests
+build/stochas_tests                        # engine, persistence, processor and editor tests
+build/stochas_tests --snapshot snapshots   # renders the editor to PNG files
+```
+
+On a headless Linux machine run them under `xvfb-run`. `stochas_core_tests` runs only the engine, timeline and persistence tests, without UI code.
+
+The GitHub Actions workflows in `.github/workflows/` build the Windows CLAP for pull requests and releases, and run the tests on Linux for pull requests.
 
 ## Architecture
 
-See [`docs/architecture.md`](docs/architecture.md) for the product model, semantic mapping strategy, persistence layers and design direction.
+See [`docs/architecture.md`](docs/architecture.md) for the data model, the timing model, threading and the editor structure.
 
 ## Upstream
 
-This project is derived from the open-source **Stochas** sequencer. The inherited engine/source remains under its original licensing terms; Stochas GGD adds the GGD-specific event engine, semantic mapping, editor, library and workflow layers used by this fork.
+This project is derived from the open-source **Stochas** sequencer. The inherited source remains under its original licensing terms (GPL v3, see `COPYING`). Stochas GGD adds the GGD-specific event engine, semantic mapping, editor, library and workflow layers. The Inter typeface is embedded under the SIL Open Font License (`resources/fonts/OFL.txt`).

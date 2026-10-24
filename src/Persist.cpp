@@ -1,15 +1,19 @@
 /***************************************************************
  ** Copyright (C) 2016 by Andrew Shakinovsky
  **
- ** You may also use this code under the terms of the 
+ ** You may also use this code under the terms of the
  ** GPL v3 (see www.gnu.org/licenses).
- ** STOCHAS IS PROVIDED "AS IS" WITHOUT ANY WARRANTY, AND ALL 
- ** WARRANTIES, WHETHER EXPRESSED OR IMPLIED, INCLUDING 
+ ** STOCHAS IS PROVIDED "AS IS" WITHOUT ANY WARRANTY, AND ALL
+ ** WARRANTIES, WHETHER EXPRESSED OR IMPLIED, INCLUDING
  ** MERCHANTABILITY AND FITNESS FOR PURPOSE, ARE DISCLAIMED.
  ***************************************************************/
 
 #include "Persist.h"
 #include "Constants.h"
+#include "GgdEventPersist.h"
+
+#include <cmath>
+#include <memory>
 
 XmlElement * SeqPersist::addKeyVal(const char *name, const String & value)
 {
@@ -55,9 +59,7 @@ bool SeqPersist::getKeyVal(XmlElement * e, double * val)
 bool SeqPersist::getKeyVal(XmlElement * e, String * val)
 {
    *val = e->getStringAttribute("val",String());
-   if (val->length())
-      return true;
-   return false;
+   return val->length() > 0;
 }
 
 void SeqPersist::storeMidiMap(int idx, SeqMidiMapItem * item, XmlElement * parent)
@@ -75,7 +77,7 @@ void SeqPersist::storeMidiMap(int idx, SeqMidiMapItem * item, XmlElement * paren
    }
 }
 
-void SeqPersist::storeLayer(int idx, SequenceLayer * item, XmlElement * parent)
+void SeqPersist::storeLayer(int idx, const SequenceLayer * item, XmlElement * parent)
 {
    const char *scale;
    const char *key;
@@ -85,7 +87,7 @@ void SeqPersist::storeLayer(int idx, SequenceLayer * item, XmlElement * parent)
    parent->prependChildElement(lyr);
 
    lyr->setAttribute("idx", idx);
-   lyr->setAttribute("name", item->getLayerName());
+   lyr->setAttribute("name", String::fromUTF8(item->getLayerName()));
    lyr->prependChildElement(addKeyVal("combine", item->isCombineMode() ? 1ll:0ll));
    lyr->prependChildElement(addKeyVal("humlen", (int64)item->getHumanLength()));
    lyr->prependChildElement(addKeyVal("humvel", (int64)item->getHumanVelocity()));
@@ -110,29 +112,22 @@ void SeqPersist::storeLayer(int idx, SequenceLayer * item, XmlElement * parent)
    k->setAttribute("stdkey", key);
    k->setAttribute("stdoct", oct);
 
-
    XmlElement *elem = new XmlElement("notes");
    lyr->prependChildElement(elem);
-   for (int i = SEQ_MAX_ROWS-1; i >=0 ; i--) {
+   for (int i = SEQ_MAX_ROWS-1; i >=0 ; i--)
       storeNote(i, item, elem);
-   }
+
    elem = new XmlElement("pats");
    lyr->prependChildElement(elem);
-   for (int i = SEQ_MAX_PATTERNS-1; i >=0 ; i--) {
+   for (int i = SEQ_MAX_PATTERNS-1; i >=0 ; i--)
       storePattern(i, item, elem);
-   }
-
 }
 
-
-void SeqPersist::retrieveLayer(XmlElement * e, SequenceLayer * lay)
+void SeqPersist::retrieveLayer(XmlElement * e, int layerIndex, SequenceLayer * lay)
 {
    int64 ival;
-   int val;
-   String sval;
-   int idx;
-   sval = e->getStringAttribute("name");
-   lay->setLayerName(sval.getCharPointer());
+   String sval = e->getStringAttribute("name");
+   lay->setLayerName(sval.toRawUTF8());
    for (auto* ch : e->getChildIterator()) {
       if (ch->hasTagName("humlen")) {
          if (getKeyVal(ch, &ival))
@@ -196,199 +191,189 @@ void SeqPersist::retrieveLayer(XmlElement * e, SequenceLayer * lay)
       }
       else if (ch->hasTagName("notes")) {
          for (auto* note : ch->getChildWithTagNameIterator("n")) {
-            idx = note->getIntAttribute("idx");
+            const int idx = note->getIntAttribute("idx");
             if (idx >= 0 && idx < SEQ_MAX_ROWS) {
-               val = note->getIntAttribute("std");
-               lay->setNote(idx, (int8_t)val, false);
-               val = note->getIntAttribute("cust");
-               lay->setNote(idx, (int8_t)val, true);
-               sval = note->getStringAttribute("name");
-               auto s = sval.getCharPointer();
-               if(strlen(s)) {
-                  lay->setNoteName(idx, s);
-               }
+               lay->setNote(idx, (int8_t)note->getIntAttribute("std"), false);
+               lay->setNote(idx, (int8_t)note->getIntAttribute("cust"), true);
+               const auto name = note->getStringAttribute("name");
+               if (name.isNotEmpty())
+                  lay->setNoteName(idx, name.toRawUTF8());
             }
          }
       }
       else if (ch->hasTagName("pats")) {
-         for (auto* pat : ch->getChildWithTagNameIterator("p")) {
-            retrievePattern(pat, lay);
-         }
+         for (auto* pat : ch->getChildWithTagNameIterator("p"))
+            retrievePattern(pat, layerIndex, lay);
       }
       else if (ch->hasTagName("sko")) {
          String scale = ch->getStringAttribute("stdscale");
          String key = ch->getStringAttribute("stdkey");
          int oct = ch->getIntAttribute("stdoct");
-         lay->setKeyScaleOct(scale.getCharPointer(), key.getCharPointer(), oct);
+         lay->setKeyScaleOct(scale.toRawUTF8(), key.toRawUTF8(), oct);
       }
       else if (ch->hasTagName("curpat")) {
         if (getKeyVal(ch, &ival))
-          lay->setCurrentPattern(ival);
+          lay->setCurrentPattern((int)ival);
       }
    }
 }
 
-void SeqPersist::storeNote(int idx, SequenceLayer * item, XmlElement * parent)
+void SeqPersist::storeNote(int idx, const SequenceLayer * item, XmlElement * parent)
 {
-   // note that although sequence data holds a note label for both std and cust, we only
-   // store cust here
-   char nbuf[SEQ_MAX_NOTELABEL_LEN + 1];
-   nbuf[SEQ_MAX_NOTELABEL_LEN] = 0;
+   // Both note sets are stored; only the custom set carries labels.
    XmlElement *n = new XmlElement("n");
    parent->prependChildElement(n);
    n->setAttribute("idx", idx);
    n->setAttribute("std", item->getNote(idx, false));
    n->setAttribute("cust", item->getNote(idx, true));
-   strncpy(nbuf, item->getNoteName(idx), SEQ_MAX_NOTELABEL_LEN);
-   if(strlen(nbuf))
-      n->setAttribute("name", nbuf);
-
+   const String label(CharPointer_UTF8(item->getNoteName(idx)), (size_t) SEQ_MAX_NOTELABEL_LEN);
+   if (label.isNotEmpty())
+      n->setAttribute("name", label);
 }
 
-
-void SeqPersist::retrievePattern(XmlElement * e, SequenceLayer * lay)
+void SeqPersist::retrievePattern(XmlElement * e, int layerIndex, SequenceLayer * lay)
 {
-   
-   int pat = e->getIntAttribute("idx");
+   const int pat = e->getIntAttribute("idx");
    if (pat < 0 || pat >= SEQ_MAX_PATTERNS)
       return;
-   String sval;
-   sval = e->getStringAttribute("name");   
-   if(sval.length()) // if differs from default it will be saved
-      lay->setPatternName(sval.getCharPointer(), pat);
 
-   for (auto* ch : e->getChildWithTagNameIterator("rows")) {
-      for (auto* row : ch->getChildWithTagNameIterator("r")) {
-         int rowidx=row->getIntAttribute("idx");
-         if (rowidx >= 0 && rowidx < SEQ_MAX_ROWS) {
-            for (auto* cells : row->getChildWithTagNameIterator("cells")) {
-               for (auto* cell : cells->getChildWithTagNameIterator("c")) {
-                  int cellidx = cell->getIntAttribute("idx");
-                  if (cellidx >= 0 && cellidx < SEQ_MAX_STEPS) {
-                     lay->setProb(rowidx, cellidx, (int8_t)cell->getIntAttribute("prob", SEQ_PROB_OFF), pat);
-                     lay->setVel(rowidx, cellidx, (int8_t)cell->getIntAttribute("velo"), pat);
-                     lay->setLength(rowidx, cellidx, (int8_t)cell->getIntAttribute("len"), pat);
-                     lay->setOffset(rowidx, cellidx, (int8_t)cell->getIntAttribute("offs"), pat);
+   const String name = e->getStringAttribute("name");
+   if (name.isNotEmpty())
+      lay->setPatternName(name.toRawUTF8(), pat);
 
-                     for (auto* cs : cell->getChildWithTagNameIterator("cs")) {
-                        int srcRow=cs->getIntAttribute("row");
-                        int srcStep=cs->getIntAttribute("col");
-                        bool negtgt=(cs->getIntAttribute("neg") == 1);
-                        bool negsrc = (cs->getIntAttribute("negsrc") == 1);
-                        lay->addChainSource(rowidx, cellidx, srcRow, srcStep, negtgt,negsrc, pat);
-                     }
-                  }
-               }
+   // Inherited grid cells (alpha projects). Chains are ignored: GGD never
+   // created them and event patterns have no equivalent.
+   auto &cells = mLegacyCells[layerIndex][pat];
+   for (auto* rows : e->getChildWithTagNameIterator("rows")) {
+      for (auto* row : rows->getChildWithTagNameIterator("r")) {
+         const int rowIndex = row->getIntAttribute("idx");
+         if (rowIndex < 0 || rowIndex >= SEQ_MAX_ROWS)
+            continue;
+         for (auto* cellList : row->getChildWithTagNameIterator("cells")) {
+            for (auto* cell : cellList->getChildWithTagNameIterator("c")) {
+               LegacyCell legacy;
+               legacy.row = rowIndex;
+               legacy.step = cell->getIntAttribute("idx", -1);
+               legacy.prob = cell->getIntAttribute("prob", SEQ_PROB_OFF);
+               legacy.velo = cell->getIntAttribute("velo");
+               legacy.length = cell->getIntAttribute("len");
+               legacy.offset = cell->getIntAttribute("offs");
+               if (legacy.step >= 0 && legacy.step < SEQ_MAX_STEPS && legacy.prob != SEQ_PROB_OFF)
+                  cells.push_back(legacy);
             }
          }
-      }     
+      }
    }
 }
 
-
-void SeqPersist::storePattern(int idx, SequenceLayer * item, XmlElement * parent)
+void SeqPersist::storePattern(int idx, const SequenceLayer * item, XmlElement * parent)
 {
-   bool haveRows = false;
-   // only store pattern if it has chains and rows
-   XmlElement *p = new XmlElement("p");
+   // Hits live in the ggd-event-state element; only an edited name is kept
+   // here so older builds still show it.
    const char *pname = item->getPatternName(idx);
-   if (strcmp(pname, SEQ_DEFAULT_PAT_NAME) != 0) {
-      // pattern name was edited
-      p->setAttribute("name", pname);
-   }
-   else
-      pname = 0; // indicate not edited
+   if (strcmp(pname, SEQ_DEFAULT_PAT_NAME) == 0)
+      return;
 
+   XmlElement *p = new XmlElement("p");
+   p->setAttribute("name", String::fromUTF8(pname));
    p->setAttribute("idx", idx);
-   XmlElement *elem = new XmlElement("rows");
-   p->prependChildElement(elem);
-   for (int i = SEQ_MAX_ROWS-1; i>=0 ; i--) {
-      if (storeRow(i, idx, item, elem))
-         haveRows = true;
-   }   
-
-   if (haveRows || pname != 0)
-      parent->prependChildElement(p);
-   else // no rows
-      delete p;
+   p->prependChildElement(new XmlElement("rows"));
+   parent->prependChildElement(p);
 }
 
-bool SeqPersist::storeRow(int idx, int pat, SequenceLayer * item, XmlElement * parent)
+bool SeqPersist::isGgdLayerTag(const String &layerName)
 {
-   XmlElement *r = new XmlElement("r");
-   bool haveRow = false;
-   r->setAttribute("idx", idx);
-   XmlElement *elem = new XmlElement("cells");
-   r->prependChildElement(elem);
-   for (int i = SEQ_MAX_STEPS-1; i >=0; i--) {
-      if (storeCell(i,pat,idx, item, elem))
-         haveRow = true;
-   }
+   return layerName.startsWith("GGD:") || layerName.startsWith("GGD2:")
+       || layerName.startsWith("GGD3:") || layerName.startsWith("GGD4:");
+}
 
-   // only do this if we had at least one cell
-   if (haveRow) {
-      parent->prependChildElement(r);
-      return true;
-   }
-   else {
-      delete r;
+bool SeqPersist::parseLegacyMeter(const String &layerName, int &numerator, int &denominator)
+{
+   if (!layerName.startsWith("GGD3:"))
       return false;
-   }
+   auto remainder = layerName.fromFirstOccurrenceOf(":", false, false);
+   remainder = remainder.fromFirstOccurrenceOf(":", false, false);
+   const int n = remainder.upToFirstOccurrenceOf("/", false, false).getIntValue();
+   const int d = remainder.fromFirstOccurrenceOf("/", false, false).getIntValue();
+   if (n < 1 || n > 32 || (d != 4 && d != 8 && d != 16))
+      return false;
+   numerator = n;
+   denominator = d;
+   return true;
 }
 
-bool SeqPersist::storeCell(int idx, int pat, int row,  SequenceLayer * item, XmlElement * parent)
+void SeqPersist::migrateLegacyCells(const std::vector<LegacyCell> &cells,
+                                    GgdEventPattern &destination,
+                                    int numerator, int denominator, int bars)
 {
-   int it, srcRow, srcCol;
-   bool negtgt, negsrc;
-   XmlElement *r;
-   if (item->getProb(row, idx, pat) != SEQ_PROB_OFF) {
-      r = new XmlElement("c");
-      parent->prependChildElement(r);
-      r->setAttribute("idx", idx);
-      r->setAttribute("prob", item->getProb(row, idx, pat));
-      r->setAttribute("velo", item->getVel(row, idx, pat));
-      r->setAttribute("len", item->getLength(row, idx, pat));
-      r->setAttribute("offs", item->getOffset(row, idx, pat));
+   destination.clear(false);
+   destination.activate(numerator, denominator, bars);
+   const int patternLength = destination.getLengthTicks();
 
-      // store chain for this cell
-      it = -1;
-      while (item->getChainSource(row, idx, &it, &srcRow, &srcCol, &negtgt, &negsrc, pat)) {
-         XmlElement *cs = new XmlElement("cs");
-         r->prependChildElement(cs);
-         cs->setAttribute("row", srcRow);
-         cs->setAttribute("col", srcCol);
-         cs->setAttribute("neg", negtgt ? 1 : 0);
-         cs->setAttribute("negsrc", negsrc ? 1 : 0);
+   for (const auto &cell : cells) {
+      const int baseTick = cell.step * GGD_TICKS_PER_16TH;
+      if (baseTick >= patternLength)
+         continue;
+
+      const int velocity = jlimit(1, 127, cell.velo);
+      const int probability = jlimit(0, 100, cell.prob);
+
+      if (cell.length < 0) {
+         // Stochas retrigger: the step is split into evenly spaced hits.
+         const int triggers = jmax(2, -cell.length + 1);
+         for (int trigger = 0; trigger < triggers; ++trigger) {
+            const int tick = baseTick + (int)std::llround(
+               (double)GGD_TICKS_PER_16TH * trigger / (double)triggers);
+            if (tick >= patternLength)
+               break;
+            destination.addEvent(cell.row, tick, velocity, probability,
+                                 jmax(1, GGD_TICKS_PER_16TH / jmax(1, triggers * 2)));
+         }
+         continue;
       }
 
-      return true;
+      const int shifted = baseTick + (int)std::llround(
+         (double)cell.offset * GGD_TICKS_PER_16TH / 100.0);
+      destination.addEvent(cell.row,
+                           jlimit(0, patternLength - 1, shifted),
+                           velocity, probability,
+                           jmax(1, (cell.length + 1) * GGD_TICKS_PER_16TH));
    }
-   
-   return false;
 }
 
-const XmlElement & SeqPersist::store(SequenceData * sourceData)
+void SeqPersist::migrateLegacyLayers(SequenceData *targetData)
+{
+   for (int layerIndex = 0; layerIndex < SEQ_MAX_LAYERS; ++layerIndex) {
+      auto *layer = targetData->getLayer(layerIndex);
+      const auto tag = String::fromUTF8(layer->getLayerName());
+      if (!isGgdLayerTag(tag))
+         continue;
+
+      int numerator = 4;
+      int denominator = 4;
+      parseLegacyMeter(tag, numerator, denominator);
+      const int stepsPerBar = jmax(1, numerator * 16 / denominator);
+      const int bars = jlimit(1, 64, (layer->getNumSteps() + stepsPerBar - 1) / stepsPerBar);
+
+      for (int pat = 0; pat < SEQ_MAX_PATTERNS; ++pat) {
+         const auto &cells = mLegacyCells[layerIndex][pat];
+         if (!cells.empty())
+            migrateLegacyCells(cells, *layer->getEventPattern(pat), numerator, denominator, bars);
+      }
+   }
+}
+
+const XmlElement & SeqPersist::store(const SequenceData * sourceData)
 {
    int i,len;
    XmlElement *elem;
+   auto *data = const_cast<SequenceData *>(sourceData);
    mRoot.deleteAllChildElements();
    mRoot.setAttribute("version", SEQ_SERIALIZE_CURRENT_VERSION);
-   /*
-   data
-     layers
-       note sets
-        notes
-       patterns
-         rows
-           cells
-         chain sources
-           source cells
-     groove
-     midi map items
-   */
+
    mRoot.prependChildElement(addKeyVal("bpm", sourceData->getStandaloneBPM()));
-   mRoot.prependChildElement(addKeyVal("autoplay", (int64)sourceData->getAutoPlayMode())); 
-   mRoot.prependChildElement(addKeyVal("offtime", (int64)sourceData->getOffsetTime())); // global offset time
+   mRoot.prependChildElement(addKeyVal("autoplay", (int64)sourceData->getAutoPlayMode()));
+   mRoot.prependChildElement(addKeyVal("offtime", (int64)sourceData->getOffsetTime()));
    mRoot.prependChildElement(addKeyVal("swing", (int64)sourceData->getSwing()));
    mRoot.prependChildElement(addKeyVal("seed", sourceData->getRandomSeed()));
    mRoot.prependChildElement(addKeyVal("midipass", (int64)sourceData->getMidiPassthru()));
@@ -396,29 +381,27 @@ const XmlElement & SeqPersist::store(SequenceData * sourceData)
    elem = new XmlElement("groove");
    mRoot.prependChildElement(elem);
    for (i = SEQ_DEFAULT_NUM_STEPS-1; i >=0 ; i--) {
-      int grv;
-      // only store non-zero ones
-      if ((grv = sourceData->getGroove(i)) != 0) {
+      const int grv = sourceData->getGroove(i);
+      if (grv != 0) {
          XmlElement *g = new XmlElement("i");
          g->setAttribute("idx", i);
          g->setAttribute("val", grv);
          elem->prependChildElement(g);
-      }         
+      }
    }
 
    elem = new XmlElement("midimap");
    mRoot.prependChildElement(elem);
    len = sourceData->getMappingCount();
-   if (len) {
-      for (i = len - 1; i >= 0; i--)
-         storeMidiMap(i, sourceData->getMappingItem(i), elem);
-   }
+   for (i = len - 1; i >= 0; i--)
+      storeMidiMap(i, data->getMappingItem(i), elem);
 
    elem = new XmlElement("layer");
    mRoot.prependChildElement(elem);
    for (i = SEQ_MAX_LAYERS-1; i >=0 ; i--)
       storeLayer(i, sourceData->getLayer(i), elem);
 
+   GgdEventPersist::store(*sourceData, mRoot);
    return mRoot;
 }
 
@@ -427,16 +410,19 @@ bool SeqPersist::retrieve(SequenceData * targetData, const XmlElement * sourceDa
    int idx;
    int64 val;
    double dval;
-   /// read source data into target data
-   if (sourceData->getTagName().compare("stochas") != 0) 
-      return false;
-   
-   if(sourceData->getIntAttribute("version",-1) != SEQ_SERIALIZE_CURRENT_VERSION)
+
+   if (sourceData == nullptr || sourceData->getTagName().compare("stochas") != 0)
       return false;
 
-   // start fresh (dont put sequencedata on stack! it's too big!)
-   std::unique_ptr<SequenceData> dummy(new SequenceData());
-   *targetData = *dummy;
+   if (sourceData->getIntAttribute("version",-1) != SEQ_SERIALIZE_CURRENT_VERSION)
+      return false;
+
+   for (auto &layerCells : mLegacyCells)
+      for (auto &cells : layerCells)
+         cells.clear();
+
+   // start fresh (SequenceData is too big for the stack)
+   *targetData = *std::make_unique<SequenceData>();
 
    for(auto *e : sourceData->getChildIterator()) {
       if (e->hasTagName("groove")) {
@@ -447,9 +433,8 @@ bool SeqPersist::retrieve(SequenceData * targetData, const XmlElement * sourceDa
                if (idx < SEQ_DEFAULT_NUM_STEPS && idx >= 0)
                   targetData->setGroove(idx, (int)val);
             }
-         }         
-      } // end groove
-
+         }
+      }
       else if (e->hasTagName("midimap")) {
          int mapcount = 0;
          for(auto *m : e->getChildIterator()) {
@@ -464,17 +449,11 @@ bool SeqPersist::retrieve(SequenceData * targetData, const XmlElement * sourceDa
                   mm->mType = (int8_t)m->getIntAttribute("typ");
                   mm->mValue = (int8_t)m->getIntAttribute("val");
 
-                  // legacy check: we need to see whether this is a transpose action (SEQMIDI_ACTION_TRANS) where the
-                  // value is SEQMIDI_VALUE_TRANS_NEXT_LEGACY or SEQMIDI_VALUE_TRANS_PREV_LEGACY.
-                  // in that case it needs to be ported to a SEQMIDI_ACTION_TRANS_RELATIVE action with values
-                  // 12 for +1 and 11 for -1
-                  // before this change, we had two items on the transpose list which would do relative transpose.
-                  // now we have a separate action for relative transpose which allows all the same transpose values
+                  // Older Stochas builds stored relative transpose as special
+                  // values of the absolute transpose action.
                   if(mm->mAction ==SEQMIDI_ACTION_TRANS &&
                      (mm->mValue == SEQMIDI_VALUE_TRANS_NEXT_LEGACY || mm->mValue == SEQMIDI_VALUE_TRANS_PREV_LEGACY)) {
-
                      mm->mAction = SEQMIDI_ACTION_TRANS_RELATIVE;
-
                      if (mm->mValue == SEQMIDI_VALUE_TRANS_NEXT_LEGACY)
                         mm->mValue = SEQMIDI_VALUE_TRANS_NEXT_NEW;
                      else
@@ -486,16 +465,14 @@ bool SeqPersist::retrieve(SequenceData * targetData, const XmlElement * sourceDa
             }
          }
          targetData->setMappingCount(mapcount);
-      } // end midimap
-
+      }
       else if (e->hasTagName("layer")) {
          for (auto* l : e->getChildWithTagNameIterator("l")) {
             idx=l->getIntAttribute("idx");
-            if (idx >= 0 && idx < SEQ_MAX_LAYERS)          
-               retrieveLayer(l, targetData->getLayer(idx));
+            if (idx >= 0 && idx < SEQ_MAX_LAYERS)
+               retrieveLayer(l, idx, targetData->getLayer(idx));
          }
-      } // end layer
-
+      }
       else if (e->hasTagName("midiresp")) {
          if (getKeyVal(e, &val))
             targetData->setMidiRespond((int)val);
@@ -503,34 +480,25 @@ bool SeqPersist::retrieve(SequenceData * targetData, const XmlElement * sourceDa
       else if (e->hasTagName("midipass")) {
          if (getKeyVal(e, &val))
             targetData->setMidiPassthru((int)val);
-
       }
       else if (e->hasTagName("seed")) {
          if (getKeyVal(e, &val))
             targetData->setRandomSeed(val);
-
       }
       else if (e->hasTagName("swing")) {
          if (getKeyVal(e, &val))
             targetData->setSwing((int)val);
-
       }
       else if (e->hasTagName("curpat")) {
-        // this is legacy from when pat/layer were always linked.
-        // set current pattern on all layers
-
+         // legacy: pattern and layer used to be linked
          if (getKeyVal(e, &val)) {
-           for(int i=0;i<SEQ_MAX_LAYERS;i++) {
-             auto lyr = targetData->getLayer(i);
-             lyr->setCurrentPattern((int)val);
-           }
+            for(int i=0;i<SEQ_MAX_LAYERS;i++)
+               targetData->getLayer(i)->setCurrentPattern((int)val);
          }
-
       }
       else if (e->hasTagName("offtime")) {
          if (getKeyVal(e, &val))
             targetData->setOffsetTime((int)val);
-
       }
       else if (e->hasTagName("autoplay")) {
          if (getKeyVal(e, &val))
@@ -540,7 +508,12 @@ bool SeqPersist::retrieve(SequenceData * targetData, const XmlElement * sourceDa
          if (getKeyVal(e, &dval))
             targetData->setStandaloneBPM(dval);
       }
-   } // for each root level element
+   }
 
+   migrateLegacyLayers(targetData);
+
+   // Event patterns saved by beta and later builds take precedence over any
+   // migrated cells for the same slot.
+   GgdEventPersist::retrieve(*targetData, *sourceData);
    return true;
 }

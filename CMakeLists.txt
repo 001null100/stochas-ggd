@@ -1,23 +1,28 @@
-# This script has been adapted from the example script that comes with JUCE in the cmake example dir.
-# Original closed-source Stochas code used the projucer.
+# Stochas GGD - CLAP drum sequencer for GetGood Drums libraries.
 #
-# To build stochas-ggd:
+# To build:
 #   git submodule update --init --recursive
-#   cmake -B build -A x64 -DSTOCHAS_VERSION=xxx
-#   cmake --build build --config Release --target stochas_CLAP
+#   cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+#   cmake --build build --target stochas_CLAP
 #
-cmake_minimum_required(VERSION 3.16)
+# Developer targets (engine/persistence tests and offscreen UI snapshots):
+#   cmake -S . -B build -DSTOCHAS_BUILD_TESTS=ON
+#   cmake --build build --target stochas_tests
+#
+cmake_minimum_required(VERSION 3.22)
 
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 if (NOT DEFINED STOCHAS_MAC_SDK_VER)
-  set(STOCHAS_MAC_SDK_VER 10.11)
+  set(STOCHAS_MAC_SDK_VER 10.13)
 endif()
 set(CMAKE_OSX_DEPLOYMENT_TARGET ${STOCHAS_MAC_SDK_VER} CACHE STRING "Build for ${STOCHAS_MAC_SDK_VER}")
 
 if (NOT DEFINED STOCHAS_VERSION)
-  set(STOCHAS_VERSION 1.3.10)
+  file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/VERSION" STOCHAS_VERSION LIMIT_COUNT 1)
+  # Re-run configuration when the version file changes.
+  set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/VERSION")
 endif()
 
 set(STOCHAS_JACK 0)
@@ -26,8 +31,10 @@ if (UNIX AND NOT APPLE)
 endif()
 
 project(StochasGGD VERSION ${STOCHAS_VERSION})
-option(STOCHAS_COPY_AFTER_BUILD FALSE "Copy after build")
+option(STOCHAS_COPY_AFTER_BUILD "Copy plug-ins to the system folders after building" FALSE)
+option(STOCHAS_BUILD_TESTS "Build engine tests and the UI snapshot tool" FALSE)
 set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 message(STATUS "Building Stochas GGD with version ${STOCHAS_VERSION}")
 
@@ -41,6 +48,12 @@ endif()
 set(STOCHAS_CATEGORY "Effect")
 add_subdirectory(lib/JUCE)
 
+# Built-in kit maps are compiled in from the authoritative JSON files.
+set(GGD_MAP_FILES
+  "${CMAKE_CURRENT_SOURCE_DIR}/maps/ggd/p-v.json"
+  "${CMAKE_CURRENT_SOURCE_DIR}/maps/ggd/p-iv.json"
+  "${CMAKE_CURRENT_SOURCE_DIR}/maps/ggd/modern-and-massive.json")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${GGD_MAP_FILES})
 file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/geninclude")
 file(READ "${CMAKE_CURRENT_SOURCE_DIR}/maps/ggd/p-v.json" GGD_MAP_PV_JSON)
 file(READ "${CMAKE_CURRENT_SOURCE_DIR}/maps/ggd/p-iv.json" GGD_MAP_PIV_JSON)
@@ -94,37 +107,36 @@ include_directories(src)
 target_include_directories(stochas PRIVATE "${CMAKE_BINARY_DIR}/geninclude")
 juce_generate_juce_header(stochas)
 
-# Final 1.0 keeps the established event scheduler and RC drag/history layers,
-# adding only isolated stabilization, output control and UI playback feedback.
-target_sources(stochas PRIVATE
-    src/EditorState.cpp
-    src/GgdDrumEditorBeta7Shell.cpp
-    src/GgdDrumEditorBeta3.cpp
-    src/GgdDrumEditorBeta4.cpp
-    src/GgdDrumEditorBeta7.cpp
-    src/GgdDrumEditorV1FinalShell.cpp
-    src/GgdDrumEditorFinal.cpp
-    src/GgdDrumGridBeta6.cpp
-    src/GgdDrumGridBeta7.cpp
-    src/GgdDrumGridV1.cpp
-    src/GgdDrumGridFinal.cpp
-    src/GgdDrumGridBeta3.cpp
-    src/GgdUiTheme.cpp
+# Engine, data model, persistence and file formats. No UI dependencies.
+set(STOCHAS_CORE_SOURCES
+    src/GgdEngine.cpp
     src/GgdEventModel.cpp
-    src/GgdSequenceEvents.cpp
     src/GgdEventPersist.cpp
-    src/GgdMidiImporter.cpp
-    src/GgdMidiExporter.cpp
-    src/GgdPatternFile.cpp
-    src/GgdLibraryBrowser.cpp
     src/GgdKitMap.cpp
-    src/pcg_basic.c
-    src/PersistBeta.cpp
-    src/PluginProcessor.cpp
+    src/GgdMidiExporter.cpp
+    src/GgdMidiImporter.cpp
+    src/GgdPatternFile.cpp
+    src/GgdPatternOps.cpp
+    src/GgdProject.cpp
+    src/GgdTimeline.cpp
+    src/Persist.cpp
     src/Scale.cpp
-    src/SeqRandom.cpp
     src/SequenceData.cpp
-    src/StochaEngineBeta.cpp
+)
+
+set(STOCHAS_UI_SOURCES
+    src/GgdDrumEditor.cpp
+    src/GgdDrumGrid.cpp
+    src/GgdLibraryBrowser.cpp
+    src/GgdPadEditor.cpp
+    src/GgdSettingsPanel.cpp
+    src/GgdUiTheme.cpp
+)
+
+target_sources(stochas PRIVATE
+    ${STOCHAS_CORE_SOURCES}
+    ${STOCHAS_UI_SOURCES}
+    src/PluginProcessor.cpp
     ${CMAKE_BINARY_DIR}/geninclude/version.cpp
 )
 
@@ -133,13 +145,49 @@ target_compile_definitions(stochas
     JUCE_WEB_BROWSER=0
     JUCE_USE_CURL=0
     JUCE_VST3_CAN_REPLACE_VST2=0
-    JUCE_DISPLAY_SPLASH_SCREEN=0
     JUCE_REPORT_APP_USAGE=0
     JUCE_JACK=${STOCHAS_JACK}
     JUCE_ALSA=1
 )
 
+# Embedded UI fonts (Inter, SIL OFL - see resources/fonts/OFL.txt).
+juce_add_binary_data(stochas_assets
+    HEADER_NAME GgdAssets.h
+    NAMESPACE GgdAssets
+    SOURCES
+      resources/fonts/Inter-Regular.otf
+      resources/fonts/Inter-Medium.otf
+      resources/fonts/Inter-SemiBold.otf
+      resources/fonts/Inter-Bold.otf)
+
 target_link_libraries(stochas PRIVATE
+    stochas_assets
     juce::juce_audio_utils
     juce::juce_audio_plugin_client
 )
+
+if (STOCHAS_BUILD_TESTS)
+  # Fast unit tests of the engine, timeline and persistence (no UI).
+  juce_add_console_app(stochas_core_tests PRODUCT_NAME "Stochas GGD Core Tests")
+  juce_generate_juce_header(stochas_core_tests)
+  add_dependencies(stochas_core_tests git-info)
+  target_include_directories(stochas_core_tests PRIVATE src "${CMAKE_BINARY_DIR}/geninclude")
+  target_sources(stochas_core_tests PRIVATE
+      tests/CoreTests.cpp
+      tests/TestMain.cpp
+      ${STOCHAS_CORE_SOURCES}
+      ${CMAKE_BINARY_DIR}/geninclude/version.cpp)
+  target_compile_definitions(stochas_core_tests PRIVATE
+      JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 STOCHAS_CORE_TESTS_ONLY=1)
+  target_link_libraries(stochas_core_tests PRIVATE
+      juce::juce_core juce::juce_data_structures juce::juce_events juce::juce_audio_basics
+      juce::juce_recommended_config_flags)
+
+  # Processor-level tests and the offscreen UI snapshot tool link the
+  # complete plug-in code.
+  add_executable(stochas_tests tests/TestMain.cpp tests/CoreTests.cpp tests/PluginTests.cpp)
+  target_link_libraries(stochas_tests PRIVATE stochas)
+  target_include_directories(stochas_tests PRIVATE $<TARGET_PROPERTY:stochas,INCLUDE_DIRECTORIES>)
+  target_compile_definitions(stochas_tests PRIVATE
+      $<TARGET_PROPERTY:stochas,COMPILE_DEFINITIONS>)
+endif()

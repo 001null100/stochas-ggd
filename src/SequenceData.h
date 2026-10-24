@@ -12,31 +12,32 @@
 #define SEQUENCEDATA_H_
 
 /**
-This maintains a model of the current state. It includes everything needed to save/load
-a patch or preset. It does not include user preferences. It does not include current state
-of midi-switched values (eg midi pattern change). That state is stored in stocha engine
-and overrides the state here (so you will not see it here)
+The complete project state that is saved with the host project. It is a plain
+value type (no pointers) because the UI and audio threads each work on their
+own copy, see SeqDataBuffer.
 
-Do not add pointers to any of these!
+Stochas GGD stores drum hits as GGD event patterns. The inherited Stochas cell
+matrix and chain tables are no longer held in memory: projects saved by early
+alpha builds are converted to event patterns while they load (Persist.cpp).
 */
 
 #include "Constants.h"
-#include "Scale.h"
+#include "GgdDrumMachine.h"
 #include "GgdEventModel.h"
+#include "GgdTimeline.h"
+
+#include <atomic>
 #include <cstdint>
 
 // Stochas' inherited 14-character pattern-name ceiling is unnecessarily tight
-// for a groove library. Project/pattern persistence stores names as strings, so
-// widening the in-memory buffer is backwards-safe; older builds simply truncate
-// a long Beta 5 name when opened there.
+// for a groove library. Names are persisted as strings, so the wider buffer is
+// backwards-safe; older builds simply truncate a long name.
 #ifdef SEQ_PATTERN_NAME_MAXLEN
 #undef SEQ_PATTERN_NAME_MAXLEN
 #endif
 #define SEQ_PATTERN_NAME_MAXLEN 33 // 32 visible characters + terminator
 
-class SequenceData;
-
-#define FIFO_SIZE 16
+#define FIFO_SIZE 32
 class SeqFifo
 {
 public:
@@ -56,7 +57,7 @@ public:
          myBuffer[start1].value2 = value2;
          myBuffer[start1].value3 = value3;
       }
-      abstractFifo.finishedWrite(size1 + size2);
+      abstractFifo.finishedWrite(size1);
       return ret;
    }
    bool readFromFifo(int *value1, int *value2, int *value3)
@@ -70,7 +71,7 @@ public:
          *value3 = myBuffer[start1].value3;
          ret = true;
       }
-      abstractFifo.finishedRead(size1 + size2);
+      abstractFifo.finishedRead(size1);
       return ret;
    }
 
@@ -86,34 +87,7 @@ private:
 class SequenceLayer {
    friend class SequenceData;
 
-   // Legacy cell data is retained only for backwards project migration and
-   // inherited Stochas features. Beta drum playback/editing uses mEvents below.
-   struct Cell {
-      int8_t prob;
-      int8_t velo;
-      int8_t length;
-      int8_t offset;
-      Cell() :prob(-1), velo(0), length(0), offset(0) {}
-   };
-
-   struct Row {
-      Cell mSteps[SEQ_MAX_STEPS];
-   };
-
-   struct SourceCell {
-      uint16_t col;
-      unsigned char row;
-      unsigned char targetrow;
-      int8_t flags;
-      SourceCell() : col(0), row(0), targetrow(0), flags(0) {}
-   };
-   struct ChainSource {
-      SourceCell cells[SEQ_MAX_CHAIN_SOURCES];
-   };
-
    struct Pattern {
-      Row mRows[SEQ_MAX_ROWS];
-      ChainSource mChains[SEQ_MAX_STEPS];
       GgdEventPattern mEvents;
       char mName[SEQ_PATTERN_NAME_MAXLEN];
       Pattern() {
@@ -169,86 +143,56 @@ public:
 
    void clear();
 
-   void setMuted(bool muted);
-   bool getMuted();
+   void setMuted(bool muted) { mMuted = muted; }
+   bool getMuted() const { return mMuted; }
 
-   bool addChainSource(int row, int step, int sourceRow, int sourceStep, bool negtgt, bool negsrc, int pat=-1);
-   int getNumChainSources(int row, int step, int pat=-1);
-   bool getChainSource(int row, int step, int *iterate, int *sourceRow, int *sourceCol, bool *negtgt, bool *negsrc, int pat=-1);
-   bool getChainTarget(int row, int step, int *iterate, int *targRow, int *targCol, bool *negtgt, bool *negsrc, int pat = -1);
-
-#if 0
-   bool getChainSourceRaw(int pat, int step, int idx, int *col, int *row, int *targRow, int *flags);
-#endif
-
-   void clearChainSources(int row, int step, int pat=-1);
-
-   void setKeyScaleOct(const char *scale, const char *key, int octave);
-   void getKeyScaleOct(const char **scale, const char **key, int *oct);
-   void copyScaleData(const SequenceLayer &src);
-
-   // Legacy cell API.
-   void setVel(int row, int step, int8_t vel, int pat=-1);
-   int8_t getVel(int row, int step, int pat = -1);
-   void setProb(int row, int step, int8_t prob, int pat=-1);
-   int8_t getProb(int row, int step, int pat = -1);
-   void setLength(int row, int step, int8_t length, int pat=-1);
-   int8_t getLength(int row, int step, int pat = -1);
-   void setOffset(int row, int step, int8_t length, int pat = -1);
-   int8_t getOffset(int row, int step, int pat = -1);
-   void clearCell(int row, int step);
-   void copyCell(int targRow, int targStep, int srcRow, int srcStep);
-
-   // Beta event API. Events are the authoritative drum representation once a
-   // pattern is active. Event positions are GGD_EVENT_PPQ ticks per quarter.
+   // GGD event patterns. Positions are GGD_EVENT_PPQ ticks per quarter note.
    GgdEventPattern *getEventPattern(int pat = -1);
    const GgdEventPattern *getEventPattern(int pat = -1) const;
-   bool legacyPatternHasData(int pat = -1) const;
-   void migrateLegacyPatternToEvents(int pat,
-                                     int numerator,
-                                     int denominator,
-                                     int bars);
 
+   // Destination note per storage row (custom set) and the inherited
+   // scale-derived note set kept for state compatibility.
+   void setKeyScaleOct(const char *scale, const char *key, int octave);
+   void getKeyScaleOct(const char **scale, const char **key, int *oct) const;
    void setNote(int row, int8_t val, bool custom);
-   int8_t getNote(int row, bool custom);
-   char *getNoteName(int row);
+   int8_t getNote(int row, bool custom) const;
+   const char *getNoteName(int row) const;
    void setNoteName(int row, const char *name);
-   int8_t getCurNote(int row);
-   int getRowForNote(int8_t note);
-   void setNoteSource(bool custom);
-   bool noteSourceIsCustom();
+   int8_t getCurNote(int row) const;
+   void setNoteSource(bool custom) { mCurrentNoteSet = custom ? customSet : standardSet; }
+   bool noteSourceIsCustom() const { return mCurrentNoteSet == customSet; }
 
-   int getMaxRows();
+   int getMaxRows() const { return mNumRows; }
    void setMaxRows(int val);
-   int getMaxPoly();
+   int getMaxPoly() const { return mMaxPoly; }
    void setMaxPoly(int val);
-   int getPolyBias();
+   int getPolyBias() const { return mPolyBias; }
    void setPolyBias(int val);
-   int getNumSteps();
+   int getNumSteps() const { return mNumSteps; }
    void setNumSteps(int val);
-   bool isMonoMode();
-   void setMonoMode(bool val);
-   bool isCombineMode();
-   void setCombineMode(bool val);
-   int getClockDivider();
+   bool isMonoMode() const { return mIsMonoMode; }
+   void setMonoMode(bool val) { mIsMonoMode = val; }
+   bool isCombineMode() const { return mCombineMode; }
+   void setCombineMode(bool val) { mCombineMode = val; }
+   int getClockDivider() const { return mClockDivider; }
    void setClockDivider(int c);
-   int8_t getMidiChannel();
+   int8_t getMidiChannel() const { return mMidiChannel; }
    void setMidiChannel(int8_t val);
-   int getStepsPerMeasure();
+   int getStepsPerMeasure() const { return mStepsPerMeasure; }
    void setStepsPerMeasure(int val);
-   int getDutyCycle();
+   int getDutyCycle() const { return mDutyCycle; }
    void setDutyCycle(int val);
    void setHumanVelocity(int val);
-   int getHumanVelocity();
+   int getHumanVelocity() const { return mHumanVelo; }
    void setHumanPosition(int val);
-   int getHumanPosition();
+   int getHumanPosition() const { return mHumanPos; }
    void setHumanLength(int val);
-   int getHumanLength();
-   const char *getLayerName();
+   int getHumanLength() const { return mHumanLen; }
+   const char *getLayerName() const { return mLayerName; }
    void setLayerName(const char *txt);
    void setPatternName(const char *txt, int pat = -1);
-   const char *getPatternName(int pat = -1);
-   int getCurrentPattern();
+   const char *getPatternName(int pat = -1) const;
+   int getCurrentPattern() const { return mCurrentPattern; }
    void setCurrentPattern(int p);
 };
 
@@ -279,107 +223,111 @@ class SequenceData {
    int mOffsetTime;
    int mAutoPlay;
    double mStandaloneBPM;
+   GgdTimeline::SyncMode mSyncMode;
+   GgdDrumMachineKit mDrumMachine;
 
    void setDefaultMidiMapItems();
 public:
    SequenceData();
    SequenceLayer *getLayer(int layer);
-   int getGroove(int idx);
+   const SequenceLayer *getLayer(int layer) const;
+
+   // The groove table, MIDI map, offset time and auto-play mode belong to the
+   // inherited Stochas feature set. They are kept so project state written by
+   // any build round-trips unchanged; the GGD engine does not use them.
+   int getGroove(int idx) const;
    void setGroove(int idx, int val);
-   void clearLayer(int layer);
-   void clearPattern(int layer, int pattern);
    void clearGroove();
    void clearMapping();
    void setMappingCount(int count);
-   int getMappingCount();
+   int getMappingCount() const { return mMidiMapCount; }
    SeqMidiMapItem *getMappingItem(int ind);
-   void setSwing(int val);
-   int getSwing();
-   void setMidiPassthru(int val);
-   int getMidiPassthru();
-   void setMidiRespond(int val);
-   int getMidiRespond();
-   void copyLayer(int targLayer, int srcLayer);
-   void copyScaleData(int targLayer, int srcLayer);
+   int getOffsetTime() const { return mOffsetTime; }
+   void setOffsetTime(int ms) { mOffsetTime = ms; }
+   int getAutoPlayMode() const { return mAutoPlay; }
+   void setAutoPlayMode(int autoplay) { mAutoPlay = autoplay; }
+
+   void clearLayer(int layer);
+   void clearPattern(int layer, int pattern);
    void copyPatternData(int targLayer, int targPat, int srcLayer, int srcPat);
-   int64 getRandomSeed();
-   void setRandomSeed(int64 val);
-   int getOffsetTime();
-   void setOffsetTime(int ms);
-   int getAutoPlayMode();
-   void setAutoPlayMode(int autoplay);
-   double getStandaloneBPM();
+
+   void setSwing(int val);
+   int getSwing() const { return mSwing; }
+   void setMidiPassthru(int val);
+   int getMidiPassthru() const { return mMidiPassthru; }
+   void setMidiRespond(int val);
+   int getMidiRespond() const { return mMidiRespond; }
+   int64 getRandomSeed() const { return mRandomSeed; }
+   void setRandomSeed(int64 val) { mRandomSeed = val; }
+   double getStandaloneBPM() const { return mStandaloneBPM; }
    void setStandaloneBPM(double bpm);
+
+   // How patterns line up with the host timeline (see GgdTimeline).
+   GgdTimeline::SyncMode getSyncMode() const { return mSyncMode; }
+   void setSyncMode(GgdTimeline::SyncMode mode) { mSyncMode = mode; }
+
+   // Pads of the project's Drum machine kit (names and notes).
+   const GgdDrumMachineKit &getDrumMachine() const { return mDrumMachine; }
+   GgdDrumMachineKit &getDrumMachine() { return mDrumMachine; }
 };
 
-typedef void(*ChangeCallback)(void *);
+/**
+Double buffer shared by the message thread (editing) and the audio thread
+(playback).
+
+The UI edits getUISeqData() and calls swap() to publish. The audio thread
+brackets every block with an AudioReadScope. swap() flips the buffer the audio
+thread should read and then waits until any block that is still reading the
+old buffer has finished before refreshing it, so the audio thread never sees
+a half-written pattern.
+*/
 class SeqDataBuffer {
-   Atomic<int> mCurrent;
+   std::atomic<int> mCurrent { 0 };
+   std::atomic<int> mAudioReading { -1 };
    SequenceData mBuffer[2];
-   ChangeCallback mCB;
-   void *mCBHandle;
-   SequenceData mUndoBuffer;
+
+   SequenceData *beginAudioRead();
+   void endAudioRead() { mAudioReading.store(-1); }
+
 public:
-   SeqDataBuffer() : mCurrent(0), mCB(0) , mCBHandle(0) {}
+   SeqDataBuffer() = default;
+
+   // Publishes the UI copy to the audio thread.
    void swap();
-   void undo();
-   void setChangeNotify(ChangeCallback cb, void *cbhandle);
 
-   SequenceData *getAudSeqData() {
-      return &mBuffer[mCurrent.get()];
-   }
+   // State that is not being edited (host save, engine queries outside a
+   // block) reads the published copy.
+   SequenceData *getAudSeqData() { return &mBuffer[mCurrent.load()]; }
+   SequenceData *getUISeqData() { return &mBuffer[mCurrent.load() ? 0 : 1]; }
 
-   SequenceData *getUISeqData() {
-      return &mBuffer[mCurrent.get() ? 0 : 1];
-   }
-};
-
-class SeqProcessorNotifierHelper {
-public:
-   virtual bool getStepPlayedState(int layer, int position, int notenum) = 0;
-};
-
-class SeqProcessorNotifier {
-   Atomic<int> mPlayPosition[SEQ_MAX_LAYERS];
-   Atomic<int> mCurrentPattern[SEQ_MAX_LAYERS];
-   Atomic<int> mMuteState[SEQ_MAX_LAYERS];
-   Atomic<int> mMidiEvent;
-   Atomic<int> mUINeedsUpdate;
-   Atomic<int64> mRandomSeed;
-   Atomic<int> mRecordingState;
-   Atomic<int> mManualPlayingState;
-   SeqProcessorNotifierHelper *mNotifierHelper;
-   SeqFifo mCompletedNoteFifo;
-public:
-   SeqProcessorNotifier(SeqProcessorNotifierHelper *hlpr);
-   enum PlayRecordState {
-      off,
-      on,
-      standby
+   class AudioReadScope {
+   public:
+      explicit AudioReadScope(SeqDataBuffer &buffer) : owner(buffer), data(buffer.beginAudioRead()) {}
+      ~AudioReadScope() { owner.endAudioRead(); }
+      SequenceData &get() const { return *data; }
+   private:
+      SeqDataBuffer &owner;
+      SequenceData *data;
+      JUCE_DECLARE_NON_COPYABLE(AudioReadScope)
    };
-   PlayRecordState getRecordingState();
-   PlayRecordState getPlaybackState();
-   bool getCompletedMidiNote(int *number, int *velocity,
-      int *len,
-      int *pos);
-   void clearCompletedMidiNotes();
-   bool doesUINeedUpdate();
-   int getPlayPosition(int layer);
-   int getCurrentPattern(int layer);
-   bool getMidiEventOccurred(int8_t *type, int8_t *channel, int8_t *number, int8_t *value);
-   bool getMuteState(int layer);
-   int64 getRandomSeed();
-   bool getStepPlayedState(int layer, int position, int notenum);
-   void setMidiEventOccurred(int8_t type, int8_t channel, int8_t number, int8_t value);
-   void setPlayPosition(int layer, int val);
-   void setCurrentPattern(int layer, int val);
-   void setMuteState(int layer, bool val);
-   void uiNeedsUpdate();
-   void setRandomSeed(int64 seed);
-   void addCompletedMidiNote(int number, int velocity,
-      int len, int pos);
-   void setRecordingState(PlayRecordState state);
-   void setPlaybackState(PlayRecordState playing);
+};
+
+// Lightweight audio -> UI status channel.
+class SeqProcessorNotifier {
+   std::atomic<int> mPlayPosition[SEQ_MAX_LAYERS];
+   std::atomic<int> mCurrentPattern[SEQ_MAX_LAYERS];
+   std::atomic<int> mMuteState[SEQ_MAX_LAYERS];
+   std::atomic<int> mUINeedsUpdate { 0 };
+public:
+   SeqProcessorNotifier();
+   bool doesUINeedUpdate() { return mUINeedsUpdate.exchange(0) != 0; }
+   void uiNeedsUpdate() { mUINeedsUpdate.store(1); }
+   int getPlayPosition(int layer) const { return mPlayPosition[layer].load(); }
+   void setPlayPosition(int layer, int val) { mPlayPosition[layer].store(val); }
+   int getCurrentPattern(int layer) const { return mCurrentPattern[layer].load(); }
+   void setCurrentPattern(int layer, int val) { mCurrentPattern[layer].store(val); }
+   bool getMuteState(int layer) const { return mMuteState[layer].load() == 1; }
+   void setMuteState(int layer, bool val) { mMuteState[layer].store(val ? 1 : 0); }
 };
 
 #endif

@@ -33,7 +33,7 @@ enum class DestinationKit
     pv,
     piv,
     modernMassive,
-    unknown
+    direct // any other kit (Drum machine): source notes match pad notes
 };
 
 ReverseMap buildReverseMap(const GgdKitMap& map)
@@ -73,7 +73,7 @@ DestinationKit destinationKitFor(const GgdKitMap& map)
         return DestinationKit::pv;
     if (map.id.containsIgnoreCase("modern"))
         return DestinationKit::modernMassive;
-    return DestinationKit::unknown;
+    return DestinationKit::direct;
 }
 
 bool isSupportedMeter(int numerator, int denominator)
@@ -192,6 +192,8 @@ PitchTranslation translateModernMassive(int source)
 
 PitchTranslation translatePitch(DestinationKit kit, int source)
 {
+    if (kit == DestinationKit::direct)
+        return { source, false };
     if (source == 85)
         return {};
 
@@ -262,11 +264,8 @@ GgdMidiImportResult GgdMidiImporter::parseFile(
     }
 
     const auto destinationKit = destinationKitFor(destinationMap);
-    if (destinationKit == DestinationKit::unknown)
-    {
-        result.error = "The selected destination kit does not have a GGD Groove Player translation table.";
-        return result;
-    }
+    if (destinationKit == DestinationKit::direct)
+        result.formatName = "MIDI notes";
 
     juce::FileInputStream stream(file);
     if (!stream.openedOk())

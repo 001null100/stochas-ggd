@@ -3,19 +3,33 @@
 namespace
 {
 constexpr const char* rootTag = "ggd-event-state";
+
+// Version 1 is understood by every Stochas GGD release. New information is
+// added as optional attributes so older builds can still open newer projects.
 constexpr int stateVersion = 1;
+
+const char* syncModeToken(GgdTimeline::SyncMode mode)
+{
+    return mode == GgdTimeline::SyncMode::free ? "free" : "bars";
+}
+
+GgdTimeline::SyncMode syncModeFromToken(const juce::String& token)
+{
+    return token == "free" ? GgdTimeline::SyncMode::free : GgdTimeline::SyncMode::hostBars;
+}
 }
 
 void GgdEventPersist::store(const SequenceData& sequence, juce::XmlElement& root)
 {
-    auto* beta = new juce::XmlElement(rootTag);
-    beta->setAttribute("version", stateVersion);
-    beta->setAttribute("ppq", GGD_EVENT_PPQ);
+    auto* state = new juce::XmlElement(rootTag);
+    state->setAttribute("version", stateVersion);
+    state->setAttribute("ppq", GGD_EVENT_PPQ);
+    state->setAttribute("sync", syncModeToken(sequence.getSyncMode()));
 
     for (int layerIndex = 0; layerIndex < SEQ_MAX_LAYERS; ++layerIndex)
     {
-        auto* layer = const_cast<SequenceData&>(sequence).getLayer(layerIndex);
-        auto* layerElement = new juce::XmlElement("layer");
+        const auto* layer = sequence.getLayer(layerIndex);
+        auto layerElement = std::make_unique<juce::XmlElement>("layer");
         layerElement->setAttribute("idx", layerIndex);
         bool havePattern = false;
 
@@ -35,9 +49,6 @@ void GgdEventPersist::store(const SequenceData& sequence, juce::XmlElement& root
             for (int eventIndex = 0; eventIndex < pattern->getEventCount(); ++eventIndex)
             {
                 const auto* event = pattern->getEvent(eventIndex);
-                if (event == nullptr)
-                    continue;
-
                 auto* eventElement = new juce::XmlElement("event");
                 eventElement->setAttribute("tick", event->tick);
                 eventElement->setAttribute("row", static_cast<int>(event->row));
@@ -47,28 +58,75 @@ void GgdEventPersist::store(const SequenceData& sequence, juce::XmlElement& root
                 patternElement->addChildElement(eventElement);
             }
 
+            // Hits hidden by a meter or bar change. Older builds ignore them.
+            for (int parkedIndex = 0; parkedIndex < pattern->getParkedCount(); ++parkedIndex)
+            {
+                const auto* hit = pattern->getParked(parkedIndex);
+                auto* parkedElement = new juce::XmlElement("parked");
+                parkedElement->setAttribute("bar", static_cast<int>(hit->bar));
+                parkedElement->setAttribute("offset", hit->offset);
+                parkedElement->setAttribute("row", static_cast<int>(hit->row));
+                parkedElement->setAttribute("velocity", static_cast<int>(hit->velocity));
+                parkedElement->setAttribute("probability", static_cast<int>(hit->probability));
+                parkedElement->setAttribute("duration", static_cast<int>(hit->durationTicks));
+                patternElement->addChildElement(parkedElement);
+            }
+
             layerElement->addChildElement(patternElement);
         }
 
         if (havePattern)
-            beta->addChildElement(layerElement);
-        else
-            delete layerElement;
+            state->addChildElement(layerElement.release());
     }
 
-    root.addChildElement(beta);
+    // The project's Drum machine pads. Older builds ignore the element.
+    const auto& pads = sequence.getDrumMachine();
+    auto* drumMachine = new juce::XmlElement("drum-machine");
+    drumMachine->setAttribute("pads", pads.getPadCount());
+    for (int pad = 0; pad < GGD_DRUM_MACHINE_MAX_PADS; ++pad)
+    {
+        const bool customised = pads.getNote(pad) != GgdDrumMachineKit::defaultNote(pad) || pads.getName(pad).isNotEmpty();
+        if (!customised)
+            continue;
+        auto* padElement = new juce::XmlElement("pad");
+        padElement->setAttribute("idx", pad);
+        padElement->setAttribute("note", pads.getNote(pad));
+        if (pads.getName(pad).isNotEmpty())
+            padElement->setAttribute("name", pads.getName(pad));
+        drumMachine->addChildElement(padElement);
+    }
+    state->addChildElement(drumMachine);
+
+    root.addChildElement(state);
 }
 
 bool GgdEventPersist::retrieve(SequenceData& sequence, const juce::XmlElement& root)
 {
-    const auto* beta = root.getChildByName(rootTag);
-    if (beta == nullptr)
+    const auto* state = root.getChildByName(rootTag);
+    if (state == nullptr)
         return false;
 
-    if (beta->getIntAttribute("version", -1) != stateVersion)
+    if (state->getIntAttribute("version", -1) != stateVersion)
         return false;
 
-    for (auto* layerElement : beta->getChildWithTagNameIterator("layer"))
+    sequence.setSyncMode(syncModeFromToken(state->getStringAttribute("sync", "bars")));
+
+    auto& pads = sequence.getDrumMachine();
+    pads.reset();
+    if (const auto* drumMachine = state->getChildByName("drum-machine"))
+    {
+        pads.setPadCount(drumMachine->getIntAttribute("pads", GGD_DRUM_MACHINE_DEFAULT_PADS));
+        for (auto* padElement : drumMachine->getChildWithTagNameIterator("pad"))
+        {
+            const int pad = padElement->getIntAttribute("idx", -1);
+            if (!GgdDrumMachineKit::isPad(pad))
+                continue;
+            pads.setNote(pad, padElement->getIntAttribute("note", GgdDrumMachineKit::defaultNote(pad)));
+            pads.setName(pad, padElement->getStringAttribute("name"));
+        }
+    }
+
+    for (auto* layerElement : state->getChildWithTagNameIterator("layer"))
     {
         const int layerIndex = layerElement->getIntAttribute("idx", -1);
         if (layerIndex < 0 || layerIndex >= SEQ_MAX_LAYERS)
@@ -102,6 +160,25 @@ bool GgdEventPersist::retrieve(SequenceData& sequence, const juce::XmlElement& r
                     eventElement->getIntAttribute("velocity", 100),
                     eventElement->getIntAttribute("probability", SEQ_PROB_ON),
                     eventElement->getIntAttribute("duration", GGD_DEFAULT_EVENT_DURATION_TICKS));
+            }
+
+            for (auto* parkedElement : patternElement->getChildWithTagNameIterator("parked"))
+            {
+                const int bar = parkedElement->getIntAttribute("bar", -1);
+                const int offset = parkedElement->getIntAttribute("offset", -1);
+                const int row = parkedElement->getIntAttribute("row", -1);
+                if (bar < 0 || bar >= GGD_MAX_PATTERN_BARS || offset < 0 || offset >= GGD_MAX_PATTERN_TICKS
+                    || row < 0 || row >= SEQ_MAX_ROWS)
+                    continue;
+
+                GgdParkedHit hit;
+                hit.bar = static_cast<std::int16_t>(bar);
+                hit.offset = offset;
+                hit.row = static_cast<std::uint8_t>(row);
+                hit.velocity = static_cast<std::uint8_t>(juce::jlimit(1, 127, parkedElement->getIntAttribute("velocity", 100)));
+                hit.probability = static_cast<std::int8_t>(juce::jlimit(0, 100, parkedElement->getIntAttribute("probability", SEQ_PROB_ON)));
+                hit.durationTicks = static_cast<std::uint16_t>(juce::jlimit(1, 65535, parkedElement->getIntAttribute("duration", GGD_DEFAULT_EVENT_DURATION_TICKS)));
+                pattern->addParked(hit);
             }
         }
     }

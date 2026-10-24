@@ -25,6 +25,7 @@ Use the **Releases** page of this repository. Each release publishes:
 - Meter and bar changes keep hits in their bars. Hits that don't fit are hidden (and saved with the project) and come back if the pattern grows again.
 - Semantic storage: hits are stored as articulations (`snare.hit`, `hihat.open_2`...) and the active kit map decides the MIDI note.
 - Built-in maps for GGD **P V**, **P IV** and **Modern & Massive**. The grid shows only the active kit's articulations, in its own order.
+- A **Drum machine** kit for any other instrument: up to 32 pads that you name and map to notes yourself (16 pads on C1 - D#2 to start), saved with the project.
 - Draw and Select tools: paint, erase, box select, move, duplicate, nudge, velocity and timing editing.
 - Ghost, Accent, chance (probability), Quantize, Humanize, Flam and Double, plus ramps, dynamics, fill, mirror, thin and row selection.
 - Undo/redo per pattern slot that also restores the selection.
@@ -39,7 +40,7 @@ Use the **Releases** page of this repository. Each release publishes:
 
 1. Put `Stochas.GGD.clap` where Bitwig scans for CLAP plug-ins (on Windows `C:\Program Files\Common Files\CLAP\`).
 2. Add Stochas GGD as a **Note FX** before Kontakt / your GGD instrument.
-3. Pick the matching kit in the toolbar (P V, P IV or Modern & Massive).
+3. Pick the matching kit in the toolbar (P V, P IV or Modern & Massive), or *Drum machine* for any other drum instrument (see below).
 4. Draw a pattern or double-click a groove in the library, then start the transport.
 
 Stochas GGD sends mapped notes to the instrument and passes your own MIDI (controllers, clips) through.
@@ -48,9 +49,22 @@ Stochas GGD sends mapped notes to the instrument and passes your own MIDI (contr
 
 - **Header:** pattern slots 1-8, the pattern name, the *Pattern* menu, the transport display (bar.beat and host meter), *Seq On/Off*, *Drag MIDI*, the library toggle and settings.
 - **Toolbar:** Draw/Select, undo/redo, meter, bars, grid, zoom, kit and sync mode.
-- **Timeline:** articulation rows grouped by instrument. Click a group header to fold it; click a row name to audition its note.
+- **Timeline:** articulation rows grouped by instrument. Click a group header to fold it; click a row name to audition its note. With the Drum machine kit, double-click a row name to rename that pad.
 - **Context strip:** tools for the current selection, or the mouse gestures of the current tool.
 - **Library:** grooves (`.mid`) and patterns (`.sggdp`).
+
+## Drum machine kit
+
+Choose **Drum machine** in the kit selector to drive a drum machine, sampler or any instrument that isn't a GGD library. It starts with 16 pads on **C1 - D#2** (MIDI 36-51, middle C = C3 as in Bitwig and Ableton), the layout most pad controllers and drum racks use.
+
+Click **Pads** next to the kit selector (or double-click a row name) to open the pad sheet:
+
+- **Name** each pad (*Kick*, *Rim*, *Closed hat*...). Empty names show as *Pad 1*, *Pad 2*... Press Return to move to the next pad.
+- **Note:** pick the MIDI note the pad sends, any note from 0 to 127.
+- **Pads:** 1 to 32. Pads you add continue up the keyboard from the last one. Removing pads hides their rows but keeps their hits, so they come back if you add the pads again.
+- **Play** auditions the pad; **Reset to C1 - D#2** goes back to the 16 default pads.
+
+Changes apply immediately, also while playing, and are saved with the project. Pads are addressed by number (`pad.01`...`pad.32`), so `.sggdp` pattern files move between projects that number their pads the same way. MIDI grooves imported into the Drum machine kit are placed by note number: a note lands on the pad that sends that note; other notes are reported as unresolved.
 
 ## Time signatures and sync
 
@@ -120,7 +134,7 @@ The *Pattern* menu has: duplicate to an empty slot, double length, save to the p
 
 ## MIDI import, drag-out and export
 
-Imported grooves are mapped to semantic articulations and keep their timing and velocity at 960 PPQ. Loading a groove or pattern replaces the current slot and can be undone.
+Imported grooves are mapped to semantic articulations and keep their timing and velocity at 960 PPQ. With the Drum machine kit, notes go to the pad with the same note. Loading a groove or pattern replaces the current slot and can be undone.
 
 Drag from **Drag MIDI** to drop the current pattern into your DAW as a MIDI clip, written with the active kit's notes. Once the clip is on the timeline, switch **Seq Off** so the internal pattern doesn't double it; your MIDI still passes through. *Pattern > Export MIDI file* is the fallback.
 

@@ -3,6 +3,7 @@
 #include "PluginProcessor.h"
 #include "GgdDrumGrid.h"
 #include "GgdLibraryBrowser.h"
+#include "GgdPadEditor.h"
 #include "GgdPatternOps.h"
 #include "GgdSettingsPanel.h"
 #include "GgdUiTheme.h"
@@ -47,6 +48,9 @@ public:
     GgdDrumGrid& getGrid() { return *grid; }
     void openSettings();
     void closeSettings();
+    // The Drum machine pad sheet; focusPad puts the cursor in that pad's name.
+    void openPadEditor(int focusPad = -1);
+    void closePadEditor();
     void selectPatternSlot(int slot);
     void setSyncMode(GgdTimeline::SyncMode mode);
     void showStatus(const juce::String& text);
@@ -117,6 +121,7 @@ private:
     juce::Slider zoomSlider;
     GgdButton zoomValueButton { "125%" };
     GgdButton fitButton { {}, GgdIcon::fit };
+    GgdButton padsButton { "Pads", GgdIcon::pencil };
     juce::ComboBox kitBox;
     juce::ComboBox syncBox;
 
@@ -137,6 +142,7 @@ private:
 
     std::unique_ptr<GgdLibraryBrowser> browser;
     std::unique_ptr<GgdSettingsPanel> settingsPanel;
+    std::unique_ptr<GgdPadEditor> padEditor;
     std::unique_ptr<juce::FileChooser> chooser;
 
     std::array<SlotHistory, SEQ_MAX_PATTERNS> history;
@@ -179,7 +185,11 @@ private:
     SequenceLayer& layer() const { return *ui().getLayer(GgdProject::drumLayer); }
     int currentSlot() const { return layer().getCurrentPattern(); }
     GgdEventPattern& currentPattern() const { return *layer().getEventPattern(currentSlot()); }
-    const GgdKitMap* activeMap() const { return project.getActiveMap(ui()); }
+    // The grid points at activeKit; reloadKit() refreshes it from the project.
+    GgdKitMap activeKit;
+    const GgdKitMap* activeMap() const { return &activeKit; }
+    void reloadKit(bool keepSelection);
+    bool overlayOpen() const { return settingsPanel != nullptr || padEditor != nullptr; }
 
     // frame and housekeeping
     void timerCallback() override;
@@ -219,6 +229,8 @@ private:
     void clearSlot(int slot);
     void toggleOutput();
     void setKit(int index);
+    void applyPadChanges(const GgdDrumMachineKit& pads);
+    void auditionPad(int pad);
     void showPatternMenu();
     void showMoreMenu();
     void showSlotMenu(int slot);

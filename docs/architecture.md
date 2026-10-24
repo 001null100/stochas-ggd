@@ -38,7 +38,9 @@ The active kit map resolves the articulation to a MIDI note only at playback and
 
 Kit maps are versioned JSON under `maps/` and are compiled in. MIDI values are numeric; note names are display data (Kontakt naming, MIDI 60 = C3).
 
-Inside a project, every articulation known to any built-in map has a stable *canonical row*, stored on storage row `SEQ_MAX_ROWS - canonicalCount + canonical`. New built-in maps must be appended so existing indices stay valid. `GgdProject` owns this mapping, the active kit (saved as the `GGD4:<kit>` layer tag) and the rules that keep layer 0 configured as a GGD drum layer.
+Inside a project, every articulation known to any built-in map has a stable *canonical row*, stored on storage row `SEQ_MAX_ROWS - builtInCount + canonical`. New built-in maps must be appended so existing indices stay valid. The 32 Drum machine pads (`pad.01`...`pad.32`) follow the built-in rows in the canonical table and are stored on the 32 storage rows just below the built-in block, so adding them moved nothing that older projects saved. `GgdProject` owns this mapping, the active kit (saved as the `GGD4:<kit>` layer tag, `dm` for the Drum machine) and the rules that keep layer 0 configured as a GGD drum layer.
+
+The Drum machine kit is per project: `GgdDrumMachineKit` (pad count, note and UTF-8 name per pad) lives in `SequenceData`, so it is copied to the audio buffer with every edit, and is saved as a `<drum-machine>` element with only the pads that differ from the defaults. `GgdProject::getActiveKit()` builds a `GgdKitMap` from it on demand, so the grid, MIDI import (by note number), export and drag-out treat it like any other kit.
 
 ## Event model
 

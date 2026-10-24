@@ -55,6 +55,11 @@ struct GgdEditorTestAccess
 
     static juce::Viewport& viewport(GgdDrumEditor& e) { return e.viewport; }
 
+    static void applyPads(GgdDrumEditor& e, const GgdDrumMachineKit& pads) { e.applyPadChanges(pads); }
+    static void auditionPad(GgdDrumEditor& e, int pad) { e.auditionPad(pad); }
+    static GgdPadEditor* padEditor(GgdDrumEditor& e) { return e.padEditor.get(); }
+    static bool padsButtonVisible(GgdDrumEditor& e) { return e.padsButton.isVisible(); }
+
     static void showLibrary(GgdDrumEditor& e, bool show)
     {
         auto next = e.prefs;
@@ -297,8 +302,8 @@ std::vector<NoteOn> playSong(SeqAudioProcessor& processor, FakePlayHead& head,
 int noteFor(const SeqAudioProcessor& processor, const juce::String& semanticId)
 {
     const auto& project = processor.getProject();
-    const auto* map = project.getActiveMap(*const_cast<SeqAudioProcessor&>(processor).mData.getUISeqData());
-    const auto* articulation = map != nullptr ? map->findArticulation(semanticId) : nullptr;
+    const auto kit = project.getActiveKit(*const_cast<SeqAudioProcessor&>(processor).mData.getUISeqData());
+    const auto* articulation = kit.findArticulation(semanticId);
     const auto* binding = articulation != nullptr ? articulation->primaryNoteBinding() : nullptr;
     return binding != nullptr ? binding->midi : -1;
 }
@@ -488,7 +493,7 @@ public:
                     for (int i = 0; i < pattern->getEventCount(); ++i)
                         expect(pattern->getEvent(i)->tick < pattern->getLengthTicks());
                 }
-                expect(target->getProject().getActiveMap(*target->mData.getUISeqData()) != nullptr);
+                expect(target->getProject().getActiveKit(*target->mData.getUISeqData()).groups.size() > 0);
             }
         }
 
@@ -559,6 +564,58 @@ public:
             };
             matches(kicks, expectedKicks, "kick");
             matches(snares, expectedSnares, "snare");
+        }
+
+        beginTest("Drum machine pads are saved with the project");
+        {
+            auto source = makeProcessor();
+            fillDemoProject(*source);
+            auto& data = *source->mData.getUISeqData();
+            auto& pads = data.getDrumMachine();
+            pads.setPadCount(18);
+            pads.setName(0, "909 Kick");
+            pads.setName(17, juce::String::fromUTF8(u8"Cowbell \u00e9"));
+            pads.setNote(17, 70);
+            source->getProject().setActiveMap(data, source->getProject().getDrumMachineIndex());
+            expect(addHit(*source, 0, "pad.18", GGD_EVENT_PPQ));
+            source->publishEdit(false);
+
+            juce::MemoryBlock state;
+            source->getStateInformation(state);
+            auto target = makeProcessor();
+            target->setStateInformation(state.getData(), static_cast<int>(state.getSize()));
+            auto& loaded = *target->mData.getUISeqData();
+            expect(loaded.getDrumMachine() == pads);
+            expectEquals(target->getProject().getActiveMapIndex(loaded), target->getProject().getDrumMachineIndex());
+            expect(sameEvents(eventsOf(*source, 0), eventsOf(*target, 0)));
+            expectEquals(noteFor(*target, "pad.18"), 70);
+            expectEquals(loaded.getDrumMachine().getDisplayName(17), juce::String::fromUTF8(u8"Cowbell \u00e9"));
+        }
+
+        beginTest("The Drum machine kit plays the pad notes");
+        {
+            auto processor = makeProcessor();
+            FakePlayHead head;
+            processor->setPlayHead(&head);
+            auto& data = *processor->mData.getUISeqData();
+            data.getDrumMachine().setNote(2, 61);
+            processor->getProject().setActiveMap(data, processor->getProject().getDrumMachineIndex());
+            expect(addHit(*processor, 0, "pad.01", 0));
+            expect(addHit(*processor, 0, "pad.03", GGD_EVENT_PPQ));
+            expect(addHit(*processor, 0, "pad.20", GGD_EVENT_PPQ * 2)); // beyond the 16 pads: silent
+            processor->publishEdit(false);
+
+            std::vector<NoteOn> notes;
+            for (const auto& note : playSong(*processor, head, { { 4, 4 } }))
+                if (note.ppq < 3.9) // the last block reaches the next bar's downbeat
+                    notes.push_back(note);
+            expectEquals(static_cast<int>(notes.size()), 2);
+            if (notes.size() == 2)
+            {
+                expectEquals(notes[0].note, 36);
+                expectEquals(notes[1].note, 61);
+                expectWithinAbsoluteError(notes[1].ppq, 1.0, 1.0e-3);
+            }
         }
 
         beginTest("Seq Off silences the pattern but host MIDI still passes through");
@@ -770,6 +827,78 @@ public:
             expect(sameEvents(eventsOf(*f.processor, 0), before));
             expectEquals(f.processor->getProject().getActiveMapIndex(*f.processor->mData.getUISeqData()), 2);
             expect(f.layer().getCurNote(row) >= 0);
+        }
+
+        beginTest("Drum machine pads are edited live");
+        {
+            EditorFixture f;
+            auto& editor = f.editor();
+            auto& grid = f.grid();
+            const auto& project = f.processor->getProject();
+            expect(!GgdEditorTestAccess::padsButtonVisible(editor));
+            GgdEditorTestAccess::setKit(editor, project.getDrumMachineIndex());
+            expect(GgdEditorTestAccess::padsButtonVisible(editor));
+
+            const int pad5 = project.findCanonicalRow("pad.05");
+            const int pad20 = project.findCanonicalRow("pad.20");
+            expect(!grid.getCellBounds(pad5, 0).isEmpty());
+            expect(grid.getCellBounds(pad20, 0).isEmpty(), "only 16 pads to start with");
+
+            expect(addHit(*f.processor, 0, "pad.05", 0));
+            GgdEditorTestAccess::commit(editor);
+            grid.selectAll();
+            expectEquals(grid.getSelectedCount(), 1);
+
+            auto pads = f.processor->mData.getUISeqData()->getDrumMachine();
+            pads.setPadCount(20);
+            pads.setNote(4, 72);
+            pads.setName(4, "Rim");
+            GgdEditorTestAccess::applyPads(editor, pads);
+
+            expect(!grid.getCellBounds(pad20, 0).isEmpty());
+            expectEquals(grid.getSelectedCount(), 1, "the selection survives a pad edit");
+            expectEquals(noteFor(*f.processor, "pad.05"), 72);
+            expectEquals(static_cast<int>(f.layer().getCurNote(project.storageRowForCanonical(pad5))), 72);
+            // published to the audio copy
+            const auto* audio = f.processor->mData.getAudSeqData()->getLayer(GgdProject::drumLayer);
+            expectEquals(static_cast<int>(audio->getCurNote(project.storageRowForCanonical(pad5))), 72);
+
+            // Fewer pads hide rows but never delete hits.
+            pads.setPadCount(4);
+            GgdEditorTestAccess::applyPads(editor, pads);
+            expect(grid.getCellBounds(pad5, 0).isEmpty());
+            expect(f.layer().getEventPattern(0)->getEventCount() > 0);
+            expectEquals(grid.getSelectedCount(), 0);
+            pads.setPadCount(16);
+            GgdEditorTestAccess::applyPads(editor, pads);
+            expectEquals(noteFor(*f.processor, "pad.05"), 72);
+
+            // Auditioning a pad plays its row.
+            f.processor->mIncomingData.clearFifo();
+            GgdEditorTestAccess::auditionPad(editor, 4);
+            int message = 0, layer = 0, row = 0;
+            expect(f.processor->mIncomingData.readFromFifo(&message, &layer, &row));
+            expectEquals(message, SEQ_MIDI_NOTEON);
+            expectEquals(row, project.storageRowForCanonical(pad5));
+        }
+
+        beginTest("Double-clicking a pad name opens the pad sheet");
+        {
+            EditorFixture f;
+            auto& editor = f.editor();
+            auto& grid = f.grid();
+            const auto& project = f.processor->getProject();
+            const int kick = project.findCanonicalRow("kick.hit");
+            const auto kickCell = grid.getCellBounds(kick, 0);
+            grid.mouseDoubleClick(mouseAt(grid, { 40.0f, kickCell.getCentreY() }, { 40.0f, kickCell.getCentreY() }));
+            expect(GgdEditorTestAccess::padEditor(editor) == nullptr, "built-in kits have nothing to edit");
+
+            GgdEditorTestAccess::setKit(editor, project.getDrumMachineIndex());
+            const auto cell = grid.getCellBounds(project.findCanonicalRow("pad.03"), 0);
+            grid.mouseDoubleClick(mouseAt(grid, { 40.0f, cell.getCentreY() }, { 40.0f, cell.getCentreY() }));
+            expect(GgdEditorTestAccess::padEditor(editor) != nullptr);
+            editor.closePadEditor();
+            expect(GgdEditorTestAccess::padEditor(editor) == nullptr);
         }
     }
 };
@@ -1194,6 +1323,38 @@ int runSnapshotTool(const juce::StringArray& args)
         GgdEditorTestAccess::undo(editor);
         grid.clearSelection();
         grid.setToolMode(GgdDrumGrid::ToolMode::draw);
+    });
+    runner.add([&]
+    {
+        editor.selectPatternSlot(6);
+        const auto& project = proc.getProject();
+        GgdEditorTestAccess::setKit(editor, project.getDrumMachineIndex());
+        auto pads = proc.mData.getUISeqData()->getDrumMachine();
+        const char* names[] = { "Kick", "Rim", "Snare", "Clap", "Closed hat", "Tom low", "Open hat", "Tom mid" };
+        for (int pad = 0; pad < 8; ++pad)
+            pads.setName(pad, names[pad]);
+        GgdEditorTestAccess::applyPads(editor, pads);
+        constexpr int q = GGD_EVENT_PPQ;
+        for (int beat = 0; beat < 4; ++beat)
+        {
+            addHit(proc, 6, "pad.01", beat * q, beat == 0 ? 120 : 100);
+            addHit(proc, 6, "pad.05", beat * q + q / 2, 80);
+            addHit(proc, 6, "pad.05", beat * q, 60);
+        }
+        addHit(proc, 6, "pad.03", q, 110);
+        addHit(proc, 6, "pad.03", 3 * q, 110);
+        addHit(proc, 6, "pad.07", 3 * q + q / 2, 90);
+        GgdEditorTestAccess::commit(editor);
+        grid.patternReplaced();
+    });
+    runner.add([&] { snap(editor, folder, "17-drum-machine"); });
+    runner.add([&] { editor.openPadEditor(2); });
+    runner.add([&] { snap(editor, folder, "18-pad-editor"); });
+    runner.add([&]
+    {
+        editor.closePadEditor();
+        GgdEditorTestAccess::setKit(editor, 0);
+        editor.selectPatternSlot(0);
     });
     runner.run();
 

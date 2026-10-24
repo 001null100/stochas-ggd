@@ -128,6 +128,7 @@ set(STOCHAS_UI_SOURCES
     src/GgdDrumEditor.cpp
     src/GgdDrumGrid.cpp
     src/GgdLibraryBrowser.cpp
+    src/GgdPadEditor.cpp
     src/GgdSettingsPanel.cpp
     src/GgdUiTheme.cpp
 )

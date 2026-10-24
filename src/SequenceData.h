@@ -22,6 +22,7 @@ alpha builds are converted to event patterns while they load (Persist.cpp).
 */
 
 #include "Constants.h"
+#include "GgdDrumMachine.h"
 #include "GgdEventModel.h"
 #include "GgdTimeline.h"
 
@@ -223,6 +224,7 @@ class SequenceData {
    int mAutoPlay;
    double mStandaloneBPM;
    GgdTimeline::SyncMode mSyncMode;
+   GgdDrumMachineKit mDrumMachine;
 
    void setDefaultMidiMapItems();
 public:
@@ -263,6 +265,10 @@ public:
    // How patterns line up with the host timeline (see GgdTimeline).
    GgdTimeline::SyncMode getSyncMode() const { return mSyncMode; }
    void setSyncMode(GgdTimeline::SyncMode mode) { mSyncMode = mode; }
+
+   // Pads of the project's Drum machine kit (names and notes).
+   const GgdDrumMachineKit &getDrumMachine() const { return mDrumMachine; }
+   GgdDrumMachineKit &getDrumMachine() { return mDrumMachine; }
 };
 
 /**

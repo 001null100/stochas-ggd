@@ -189,7 +189,15 @@ juce::Colour ggdInstrumentColour(const juce::String& semanticId)
 juce::Colour ggdInstrumentColour(const juce::String& semanticId, GgdThemeId theme)
 {
     juce::uint32 base = 0xff9fb3c2; // aux / percussion
-    if (semanticId.startsWith("kick"))        base = 0xffff9a4f;
+    if (semanticId.startsWith("pad."))
+    {
+        // Drum machine pads cycle through the instrument palette.
+        static constexpr juce::uint32 padColours[] = { 0xffff9a4f, 0xffff6d84, 0xff4fd8d0, 0xffb48dff,
+                                                       0xffffd35f, 0xff5aaaff, 0xff9de56d, 0xffff90d2 };
+        const int pad = juce::jmax(0, semanticId.fromFirstOccurrenceOf(".", false, false).getIntValue() - 1);
+        base = padColours[pad % 8];
+    }
+    else if (semanticId.startsWith("kick"))   base = 0xffff9a4f;
     else if (semanticId.startsWith("snare"))  base = 0xffff6d84;
     else if (semanticId.startsWith("tom"))    base = 0xffb48dff;
     else if (semanticId.startsWith("hihat"))  base = 0xff4fd8d0;

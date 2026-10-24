@@ -236,12 +236,22 @@ juce::Colour GgdDrumGrid::colourForRow(int canonical) const
 }
 
 //==============================================================================
-void GgdDrumGrid::setKitMap(const GgdKitMap* newMap)
+void GgdDrumGrid::setKitMap(const GgdKitMap* newMap, bool keepSelection)
 {
     map = newMap;
     pulses.clear();
-    setSelection({}, false);
+    if (!keepSelection)
+        setSelection({}, false);
     rebuildLayout();
+    if (keepSelection)
+    {
+        std::vector<EventRef> kept;
+        for (const auto& ref : selection)
+            if (itemForRow(ref.row) != nullptr)
+                kept.push_back(ref);
+        if (kept.size() != selection.size())
+            setSelection(std::move(kept), false);
+    }
     repaint();
 }
 
@@ -1786,6 +1796,14 @@ void GgdDrumGrid::modifierKeysChanged(const juce::ModifierKeys& modifiers)
 
 void GgdDrumGrid::mouseDoubleClick(const juce::MouseEvent& e)
 {
+    if (overLabelColumn(e.position) && !overRuler(e.position))
+    {
+        const auto* item = itemAtY(e.position.y);
+        if (item != nullptr && !item->header && callbacks.onEditRow)
+            callbacks.onEditRow(item->canonicalRow);
+        return;
+    }
+
     // Alt-double-click snaps one hit to the nearest grid position.
     const auto& mods = e.mods;
     if (!mods.isAltDown() || mods.isShiftDown() || mods.isCommandDown())

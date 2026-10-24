@@ -1,23 +1,73 @@
 #include "GgdProject.h"
 #include "Persist.h"
 
-GgdProject::GgdProject()
-    : maps(GgdKitMapLibrary::loadBuiltInMaps()),
-      canonicalRows(GgdKitMapLibrary::buildCanonicalRows(maps))
+namespace
 {
+const char* drumMachineId = "custom.drum-machine";
+}
+
+GgdKitMap GgdProject::makeDrumMachineMap(const GgdDrumMachineKit& pads, bool allPads)
+{
+    GgdKitMap map;
+    map.id = drumMachineId;
+    map.vendor = "Custom";
+    map.library = "Drum machine";
+    map.variant = "Project pads";
+
+    GgdGroup group;
+    group.id = "pads";
+    group.label = "Pads";
+    const int count = allPads ? GGD_DRUM_MACHINE_MAX_PADS : pads.getPadCount();
+    for (int pad = 0; pad < count; ++pad)
+    {
+        GgdArticulation articulation;
+        articulation.semanticId = GgdDrumMachineKit::semanticId(pad);
+        articulation.label = allPads ? GgdDrumMachineKit::defaultName(pad) : pads.getDisplayName(pad);
+        articulation.kind = "hit";
+
+        GgdMidiBinding binding;
+        binding.kind = "note";
+        binding.role = "primary";
+        binding.midi = pads.getNote(pad);
+        binding.noteName = GgdDrumMachineKit::noteName(binding.midi);
+        articulation.bindings.add(binding);
+        group.articulations.add(articulation);
+    }
+    map.groups.add(group);
+    return map;
+}
+
+GgdProject::GgdProject()
+    : maps(GgdKitMapLibrary::loadBuiltInMaps())
+{
+    // The built-in GGD rows come first and keep their storage rows; the
+    // Drum machine pads are appended after them.
+    builtInRows = GgdKitMapLibrary::buildCanonicalRows(maps).size();
+    drumMachineIndex = maps.size();
+    maps.add(makeDrumMachineMap(GgdDrumMachineKit(), true));
+    canonicalRows = GgdKitMapLibrary::buildCanonicalRows(maps);
 }
 
 int GgdProject::storageRowForCanonical(int canonicalRow) const
 {
-    const int count = juce::jlimit(SEQ_MIN_ROWS, SEQ_MAX_ROWS, canonicalRows.size());
-    return (SEQ_MAX_ROWS - count) + canonicalRow;
+    if (canonicalRow < 0 || canonicalRow >= canonicalRows.size())
+        return -1;
+    const int builtInBase = SEQ_MAX_ROWS - builtInRows;
+    if (canonicalRow < builtInRows)
+        return builtInBase + canonicalRow;
+    const int padRows = canonicalRows.size() - builtInRows;
+    return builtInBase - padRows + (canonicalRow - builtInRows);
 }
 
 int GgdProject::canonicalRowForStorage(int storageRow) const
 {
-    const int count = juce::jlimit(SEQ_MIN_ROWS, SEQ_MAX_ROWS, canonicalRows.size());
-    const int canonical = storageRow - (SEQ_MAX_ROWS - count);
-    return canonical >= 0 && canonical < canonicalRows.size() ? canonical : -1;
+    const int builtInBase = SEQ_MAX_ROWS - builtInRows;
+    const int padRows = canonicalRows.size() - builtInRows;
+    if (storageRow >= builtInBase && storageRow < SEQ_MAX_ROWS)
+        return storageRow - builtInBase;
+    if (storageRow >= builtInBase - padRows && storageRow < builtInBase)
+        return builtInRows + storageRow - (builtInBase - padRows);
+    return -1;
 }
 
 int GgdProject::findCanonicalRow(const juce::String& semanticId) const
@@ -27,6 +77,7 @@ int GgdProject::findCanonicalRow(const juce::String& semanticId) const
 
 juce::String GgdProject::persistenceToken(const GgdKitMap& map) const
 {
+    if (map.id == drumMachineId) return "dm";
     if (map.id.containsIgnoreCase(".piv.")) return "piv";
     if (map.id.containsIgnoreCase(".pv.")) return "pv";
     if (map.id.containsIgnoreCase("modern")) return "mm";
@@ -54,18 +105,28 @@ int GgdProject::getActiveMapIndex(const SequenceData& data) const
                         mapIndexFromTag(juce::String::fromUTF8(data.getLayer(drumLayer)->getLayerName())));
 }
 
-const GgdKitMap* GgdProject::getActiveMap(const SequenceData& data) const
+GgdKitMap GgdProject::kitForIndex(const SequenceData& data, int mapIndex) const
 {
-    const int index = getActiveMapIndex(data);
-    return index >= 0 ? &maps.getReference(index) : nullptr;
+    if (maps.isEmpty())
+        return {};
+    mapIndex = juce::jlimit(0, maps.size() - 1, mapIndex);
+    if (isDrumMachine(mapIndex))
+        return makeDrumMachineMap(data.getDrumMachine(), false);
+    return maps.getReference(mapIndex);
 }
 
-void GgdProject::applyBindings(SequenceLayer& layer, int mapIndex) const
+GgdKitMap GgdProject::getActiveKit(const SequenceData& data) const
+{
+    return kitForIndex(data, getActiveMapIndex(data));
+}
+
+void GgdProject::applyBindings(SequenceData& data, int mapIndex) const
 {
     if (mapIndex < 0 || mapIndex >= maps.size())
         return;
 
-    const auto& map = maps.getReference(mapIndex);
+    auto& layer = *data.getLayer(drumLayer);
+    const auto map = kitForIndex(data, mapIndex);
     for (int row = 0; row < canonicalRows.size(); ++row)
     {
         const auto& canonical = canonicalRows.getReference(row);
@@ -81,7 +142,10 @@ void GgdProject::applyBindings(SequenceLayer& layer, int mapIndex) const
 
         const int storage = storageRowForCanonical(row);
         layer.setNote(storage, static_cast<int8_t>(midi), true);
-        layer.setNoteName(storage, label.substring(0, SEQ_MAX_NOTELABEL_LEN - 1).toRawUTF8());
+        // The inherited per-row label is display data; cut it on a character boundary.
+        while (label.getNumBytesAsUTF8() > static_cast<size_t>(SEQ_MAX_NOTELABEL_LEN - 1))
+            label = label.dropLastCharacters(1);
+        layer.setNoteName(storage, label.toRawUTF8());
     }
 
     layer.setNoteSource(true);
@@ -137,7 +201,7 @@ void GgdProject::normalise(SequenceData& data) const
     layer->setMaxPoly(juce::jmin(SEQ_DEFAULT_MAX_POLY, layer->getMaxRows()));
     layer->setClockDivider(SEQ_DEFAULT_CLOCK_DIV);
 
-    applyBindings(*layer, mapIndex);
+    applyBindings(data, mapIndex);
     syncLegacyStepCount(*layer);
 }
 
@@ -145,5 +209,5 @@ void GgdProject::setActiveMap(SequenceData& data, int mapIndex) const
 {
     if (maps.isEmpty())
         return;
-    applyBindings(*data.getLayer(drumLayer), juce::jlimit(0, maps.size() - 1, mapIndex));
+    applyBindings(data, juce::jlimit(0, maps.size() - 1, mapIndex));
 }

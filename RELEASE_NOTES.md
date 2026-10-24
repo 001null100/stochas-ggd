@@ -28,6 +28,10 @@ The scheduler was rewritten along with it: block windows chain seamlessly, so te
 - Empty patterns show a short hint on how to start.
 - Long patterns scroll with the playhead, but scrolling by hand pauses following for a moment instead of fighting you.
 
+## Drum machine kit
+
+A new **Drum machine** kit drives any drum instrument, not just GGD libraries. It starts with 16 pads on C1 - D#2 (MIDI 36-51). The *Pads* sheet (or a double-click on a row name) lets you name every pad, pick its note and choose 1 to 32 pads; changes apply immediately and are saved with the project. MIDI grooves imported into it are placed by note number.
+
 ## New look
 
 - Embedded Inter typeface and a consistent set of vector icons.
@@ -54,3 +58,4 @@ The scheduler was rewritten along with it: block windows chain seamlessly, so te
 - Projects from 1.x open in *Sync: Host bars*. A 4/4 pattern in a 4/4 song plays exactly as before. Choose *Sync: Free run* to get back the 1.x timing in songs with mixed meters.
 - The automation parameter list is unchanged, so existing automation lanes keep working.
 - MIDI drag-out, MIDI export and SEQ ON / SEQ OFF behave as before.
+- Projects that use the Drum machine kit open in older versions with the first GGD kit selected; the pad names and notes are not editable there.

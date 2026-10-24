@@ -79,6 +79,24 @@ void GgdEventPersist::store(const SequenceData& sequence, juce::XmlElement& root
             state->addChildElement(layerElement.release());
     }
 
+    // The project's Drum machine pads. Older builds ignore the element.
+    const auto& pads = sequence.getDrumMachine();
+    auto* drumMachine = new juce::XmlElement("drum-machine");
+    drumMachine->setAttribute("pads", pads.getPadCount());
+    for (int pad = 0; pad < GGD_DRUM_MACHINE_MAX_PADS; ++pad)
+    {
+        const bool customised = pads.getNote(pad) != GgdDrumMachineKit::defaultNote(pad) || pads.getName(pad).isNotEmpty();
+        if (!customised)
+            continue;
+        auto* padElement = new juce::XmlElement("pad");
+        padElement->setAttribute("idx", pad);
+        padElement->setAttribute("note", pads.getNote(pad));
+        if (pads.getName(pad).isNotEmpty())
+            padElement->setAttribute("name", pads.getName(pad));
+        drumMachine->addChildElement(padElement);
+    }
+    state->addChildElement(drumMachine);
+
     root.addChildElement(state);
 }
 
@@ -92,6 +110,21 @@ bool GgdEventPersist::retrieve(SequenceData& sequence, const juce::XmlElement& r
         return false;
 
     sequence.setSyncMode(syncModeFromToken(state->getStringAttribute("sync", "bars")));
+
+    auto& pads = sequence.getDrumMachine();
+    pads.reset();
+    if (const auto* drumMachine = state->getChildByName("drum-machine"))
+    {
+        pads.setPadCount(drumMachine->getIntAttribute("pads", GGD_DRUM_MACHINE_DEFAULT_PADS));
+        for (auto* padElement : drumMachine->getChildWithTagNameIterator("pad"))
+        {
+            const int pad = padElement->getIntAttribute("idx", -1);
+            if (!GgdDrumMachineKit::isPad(pad))
+                continue;
+            pads.setNote(pad, padElement->getIntAttribute("note", GgdDrumMachineKit::defaultNote(pad)));
+            pads.setName(pad, padElement->getStringAttribute("name"));
+        }
+    }
 
     for (auto* layerElement : state->getChildWithTagNameIterator("layer"))
     {

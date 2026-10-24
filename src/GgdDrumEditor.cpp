@@ -664,6 +664,14 @@ GgdDrumEditor::GgdDrumEditor(SeqAudioProcessor& p)
     callbacks.onUndo = [this] { undo(); };
     callbacks.onRedo = [this] { redo(); };
     callbacks.onStatus = [this](const juce::String& text) { showStatus(text); };
+    callbacks.onEditRow = [this](int canonicalRow)
+    {
+        if (!project.isDrumMachine(project.getActiveMapIndex(ui())))
+            return;
+        const auto& rows = project.getCanonicalRows();
+        if (juce::isPositiveAndBelow(canonicalRow, rows.size()))
+            openPadEditor(GgdDrumMachineKit::padForSemanticId(rows.getReference(canonicalRow).semanticId));
+    };
     grid = std::make_unique<GgdDrumGrid>(processor, project, std::move(callbacks));
 
     viewport.setViewedComponent(grid.get(), false);
@@ -844,8 +852,18 @@ GgdDrumEditor::GgdDrumEditor(SeqAudioProcessor& p)
     addAndMakeVisible(fitButton);
 
     for (int i = 0; i < project.getMaps().size(); ++i)
+    {
+        if (project.isDrumMachine(i))
+            kitBox.addSeparator();
         kitBox.addItem(project.getMaps().getReference(i).library, i + 1);
-    kitBox.setTooltip("Destination kit: decides which GGD note each row plays");
+    }
+    kitBox.setTooltip("Destination kit: decides which note each row plays. Drum machine has pads you name and "
+                      "tune yourself (C1 - D#2 to start).");
+
+    padsButton.setStyle(GgdButton::Style::quiet);
+    padsButton.setTooltip("Name the Drum machine pads and pick their notes (or double-click a row name)");
+    padsButton.onClick = [this] { openPadEditor(); };
+    addChildComponent(padsButton);
     kitBox.onChange = [this]
     {
         if (kitBox.getSelectedId() > 0)
@@ -925,7 +943,7 @@ GgdDrumEditor::GgdDrumEditor(SeqAudioProcessor& p)
     preferenceStore->addChangeListener(this);
 
     // State -------------------------------------------------------------------
-    grid->setKitMap(activeMap());
+    reloadKit(false);
     grid->setZoomScale(prefs.zoom);
     applyPreferences(prefs, false);
     ensureHistory(currentSlot());
@@ -949,6 +967,7 @@ GgdDrumEditor::~GgdDrumEditor()
     vblank.reset();
     preferenceStore->removeChangeListener(this);
     settingsPanel.reset();
+    padEditor.reset();
     viewport.setViewedComponent(nullptr, false);
     setLookAndFeel(nullptr);
 }
@@ -978,7 +997,7 @@ void GgdDrumEditor::renderFrame()
     if (processor.mNotifier.doesUINeedUpdate())
         reloadFromProcessor();
 
-    if (!focusGivenToGrid && isShowing() && settingsPanel == nullptr)
+    if (!focusGivenToGrid && isShowing() && !overlayOpen())
     {
         focusGrid();
         focusGivenToGrid = grid->hasKeyboardFocus(true);
@@ -986,7 +1005,7 @@ void GgdDrumEditor::renderFrame()
 
     const auto* focused = juce::Component::getCurrentlyFocusedComponent();
     const bool typing = dynamic_cast<const juce::TextEditor*>(focused) != nullptr;
-    grid->pollKeyboard(!typing && settingsPanel == nullptr && grid->hasKeyboardFocus(true));
+    grid->pollKeyboard(!typing && !overlayOpen() && grid->hasKeyboardFocus(true));
 
     grid->updatePlayback();
     updateTransport();
@@ -1019,7 +1038,9 @@ void GgdDrumEditor::reloadFromProcessor()
     barsStepper->cancelEditing();
     nameFieldSlot = -1;
     resetHistories();
-    grid->setKitMap(activeMap());
+    // The sheet would edit pads the new project does not have.
+    padEditor.reset();
+    reloadKit(false);
     grid->patternGeometryChanged();
     ensureHistory(currentSlot());
     if (browser != nullptr)
@@ -1590,11 +1611,51 @@ void GgdDrumEditor::setKit(int index)
         return;
     project.setActiveMap(ui(), index);
     processor.publishEdit(true);
-    grid->setKitMap(activeMap());
+    reloadKit(false);
     refreshAll();
-    if (const auto* map = activeMap())
-        showStatus("Rows now play " + map->library + " notes");
+    if (project.isDrumMachine(index))
+        showStatus("Rows now play your Drum machine pads. Click Pads (or double-click a row name) to name them.");
+    else
+        showStatus("Rows now play " + activeKit.library + " notes");
     focusGrid();
+}
+
+void GgdDrumEditor::reloadKit(bool keepSelection)
+{
+    activeKit = project.getActiveKit(ui());
+    grid->setKitMap(&activeKit, keepSelection);
+}
+
+void GgdDrumEditor::applyPadChanges(const GgdDrumMachineKit& pads)
+{
+    if (ui().getDrumMachine() == pads)
+        return;
+    ui().getDrumMachine() = pads;
+    const int active = project.getActiveMapIndex(ui());
+    if (project.isDrumMachine(active))
+        project.setActiveMap(ui(), active); // re-binds the pad notes and row names
+    processor.publishEdit(true);
+    reloadKit(true);
+    refreshHeader();
+}
+
+void GgdDrumEditor::auditionPad(int pad)
+{
+    if (!juce::isPositiveAndBelow(pad, ui().getDrumMachine().getPadCount()))
+        return;
+    const int canonical = project.findCanonicalRow(GgdDrumMachineKit::semanticId(pad));
+    if (canonical < 0)
+        return;
+    const int storage = project.storageRowForCanonical(canonical);
+    if (layer().getCurNote(storage) < 0)
+        return;
+    processor.mIncomingData.addToFifo(SEQ_MIDI_NOTEON, GgdProject::drumLayer, storage);
+    auto safe = juce::Component::SafePointer<GgdDrumEditor>(this);
+    juce::Timer::callAfterDelay(180, [safe, storage]
+    {
+        if (auto* self = safe.getComponent())
+            self->processor.mIncomingData.addToFifo(SEQ_MIDI_NOTEOFF, GgdProject::drumLayer, storage);
+    });
 }
 
 void GgdDrumEditor::setSyncMode(GgdTimeline::SyncMode mode)
@@ -1969,6 +2030,7 @@ void GgdDrumEditor::openSettings()
             settingsPanel->grabKeyboardFocus();
         return;
     }
+    padEditor.reset();
 
     auto safe = juce::Component::SafePointer<GgdDrumEditor>(this);
     settingsPanel = std::make_unique<GgdSettingsPanel>(
@@ -2015,10 +2077,58 @@ void GgdDrumEditor::closeSettings()
     focusGrid();
 }
 
+void GgdDrumEditor::openPadEditor(int focusPad)
+{
+    if (settingsPanel != nullptr)
+        return;
+    if (padEditor == nullptr)
+    {
+        auto safe = juce::Component::SafePointer<GgdDrumEditor>(this);
+        padEditor = std::make_unique<GgdPadEditor>(
+            ui().getDrumMachine(),
+            [safe](const GgdDrumMachineKit& pads)
+            {
+                if (auto* self = safe.getComponent())
+                    self->applyPadChanges(pads);
+            },
+            [safe](int pad)
+            {
+                if (auto* self = safe.getComponent())
+                    self->auditionPad(pad);
+            },
+            [safe]
+            {
+                // Close after the click or key that requested it has been delivered.
+                juce::MessageManager::callAsync([safe]
+                {
+                    if (auto* self = safe.getComponent())
+                        self->closePadEditor();
+                });
+            });
+        addAndMakeVisible(*padEditor);
+        padEditor->sendLookAndFeelChange();
+        padEditor->setBounds(getLocalBounds());
+        padEditor->toFront(true);
+    }
+
+    if (focusPad >= 0)
+        padEditor->focusPad(focusPad);
+    else if (padEditor->isShowing())
+        padEditor->grabKeyboardFocus();
+}
+
+void GgdDrumEditor::closePadEditor()
+{
+    if (padEditor == nullptr)
+        return;
+    padEditor.reset();
+    focusGrid();
+}
+
 void GgdDrumEditor::focusGrid()
 {
     // Only a component that is on screen can take keyboard focus.
-    if (grid != nullptr && grid->isShowing() && settingsPanel == nullptr)
+    if (grid != nullptr && grid->isShowing() && !overlayOpen())
         grid->grabKeyboardFocus();
 }
 
@@ -2099,6 +2209,12 @@ void GgdDrumEditor::refreshHeader()
             gridBox.setSelectedId(i + 1, juce::dontSendNotification);
 
     kitBox.setSelectedId(project.getActiveMapIndex(ui()) + 1, juce::dontSendNotification);
+    const bool showPads = project.isDrumMachine(project.getActiveMapIndex(ui()));
+    if (padsButton.isVisible() != showPads)
+    {
+        padsButton.setVisible(showPads);
+        resized();
+    }
     syncBox.setSelectedId(ui().getSyncMode() == GgdTimeline::SyncMode::free ? 2 : 1, juce::dontSendNotification);
 
     const bool select = grid->getToolMode() == GgdDrumGrid::ToolMode::select;
@@ -2278,6 +2394,11 @@ void GgdDrumEditor::resized()
     syncBox.setBounds(row2.removeFromRight(150));
     row2.removeFromRight(8);
     kitBox.setBounds(row2.removeFromRight(juce::jlimit(140, 190, row2.getWidth() - 260)));
+    if (padsButton.isVisible())
+    {
+        row2.removeFromRight(4);
+        padsButton.setBounds(row2.removeFromRight(78));
+    }
     row2.removeFromRight(18);
 
     row2.removeFromLeft(16);
@@ -2301,6 +2422,8 @@ void GgdDrumEditor::resized()
 
     if (settingsPanel != nullptr)
         settingsPanel->setBounds(getLocalBounds());
+    if (padEditor != nullptr)
+        padEditor->setBounds(getLocalBounds());
 
     if (prefs.editorWidth != getWidth() || prefs.editorHeight != getHeight())
     {
@@ -2320,7 +2443,7 @@ bool GgdDrumEditor::keyPressed(const juce::KeyPress& key)
 
     // Keys that reach the editor itself (focus on a button, for example)
     // still drive the timeline.
-    if (settingsPanel == nullptr && grid != nullptr)
+    if (!overlayOpen() && grid != nullptr)
         return grid->keyPressed(key);
     return false;
 }

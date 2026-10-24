@@ -32,6 +32,8 @@ public:
         std::function<void()> onUndo;
         std::function<void()> onRedo;
         std::function<void(const juce::String&)> onStatus;
+        // A row name was double-clicked.
+        std::function<void(int canonicalRow)> onEditRow;
     };
 
     struct Preferences
@@ -52,7 +54,9 @@ public:
 
     GgdDrumGrid(SeqAudioProcessor& processor, const GgdProject& project, Callbacks callbacks);
 
-    void setKitMap(const GgdKitMap* map);
+    // The grid keeps the pointer; the map must outlive it or be replaced.
+    // keepSelection keeps selected hits on rows the new map still shows.
+    void setKitMap(const GgdKitMap* map, bool keepSelection = false);
     void setPreferences(const Preferences& preferences);
 
     // The current pattern's geometry changed (meter, bars, slot switch).

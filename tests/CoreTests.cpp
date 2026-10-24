@@ -8,6 +8,7 @@
 #include <JuceHeader.h>
 
 #include "GgdEngine.h"
+#include "GgdMidiImporter.h"
 #include "GgdPatternOps.h"
 #include "GgdProject.h"
 #include "GgdTimeline.h"
@@ -18,6 +19,7 @@
 #include <functional>
 #include <memory>
 #include <random>
+#include <set>
 #include <vector>
 
 namespace
@@ -1012,14 +1014,164 @@ public:
 
             // Kick hit is bound to the active map's kick note.
             const int kickRow = project.storageRowForCanonical(project.findCanonicalRow("kick.hit"));
-            const auto* map = project.getActiveMap(*data);
-            expect(map != nullptr);
-            const auto* kick = map->findArticulation("kick.hit");
+            const auto kit = project.getActiveKit(*data);
+            expect(kit.groups.size() > 0);
+            const auto* kick = kit.findArticulation("kick.hit");
             expect(kick != nullptr && kick->primaryNoteBinding() != nullptr);
             expectEquals(static_cast<int>(layer->getCurNote(kickRow)), kick->primaryNoteBinding()->midi);
 
             project.setActiveMap(*data, 1);
             expectEquals(project.getActiveMapIndex(*data), 1);
+        }
+
+        beginTest("Built-in rows keep their storage rows; pads sit below them");
+        {
+            GgdProject project;
+            const auto& rows = project.getCanonicalRows();
+            int builtIn = 0;
+            while (builtIn < rows.size() && GgdDrumMachineKit::padForSemanticId(rows.getReference(builtIn).semanticId) < 0)
+                ++builtIn;
+            expectEquals(rows.size() - builtIn, GGD_DRUM_MACHINE_MAX_PADS);
+            std::set<int> used;
+            for (int r = 0; r < rows.size(); ++r)
+            {
+                const int storage = project.storageRowForCanonical(r);
+                if (r < builtIn)
+                    expectEquals(storage, SEQ_MAX_ROWS - builtIn + r, "built-in rows never move");
+                expect(storage >= 0 && storage < SEQ_MAX_ROWS);
+                expect(used.insert(storage).second, "storage rows are unique");
+                expectEquals(project.canonicalRowForStorage(storage), r);
+            }
+            expectEquals(project.storageRowForCanonical(builtIn), SEQ_MAX_ROWS - builtIn - GGD_DRUM_MACHINE_MAX_PADS);
+        }
+
+        beginTest("The Drum machine kit starts with 16 pads on C1 - D#2");
+        {
+            GgdProject project;
+            auto data = std::make_unique<SequenceData>();
+            project.normalise(*data);
+            const int drum = project.getDrumMachineIndex();
+            expect(project.isDrumMachine(drum));
+            project.setActiveMap(*data, drum);
+            expectEquals(project.getActiveMapIndex(*data), drum);
+            expect(juce::String(data->getLayer(0)->getLayerName()).startsWith("GGD4:"));
+
+            const auto kit = project.getActiveKit(*data);
+            int pads = 0;
+            for (const auto& group : kit.groups)
+                pads += group.articulations.size();
+            expectEquals(pads, 16);
+            const auto* first = kit.findArticulation("pad.01");
+            const auto* last = kit.findArticulation("pad.16");
+            expect(first != nullptr && last != nullptr && kit.findArticulation("pad.17") == nullptr);
+            expectEquals(first->primaryNoteBinding()->midi, 36);
+            expectEquals(first->primaryNoteBinding()->noteName, juce::String("C1"));
+            expectEquals(last->primaryNoteBinding()->midi, 51);
+            expectEquals(last->primaryNoteBinding()->noteName, juce::String("D#2"));
+            expectEquals(first->label, juce::String("Pad 1"));
+
+            const auto* layer = data->getLayer(0);
+            for (int pad = 0; pad < GGD_DRUM_MACHINE_MAX_PADS; ++pad)
+            {
+                const int storage = project.storageRowForCanonical(project.findCanonicalRow(GgdDrumMachineKit::semanticId(pad)));
+                expectEquals(static_cast<int>(layer->getCurNote(storage)), pad < 16 ? 36 + pad : -1);
+            }
+            // Built-in rows are silent while the Drum machine plays.
+            const int kick = project.storageRowForCanonical(project.findCanonicalRow("kick.hit"));
+            expectEquals(static_cast<int>(layer->getCurNote(kick)), -1);
+        }
+
+        beginTest("Pad names and notes drive the bindings");
+        {
+            GgdProject project;
+            auto data = std::make_unique<SequenceData>();
+            project.normalise(*data);
+            auto& pads = data->getDrumMachine();
+            pads.setPadCount(20);
+            pads.setNote(0, 24);
+            pads.setName(0, juce::String::fromUTF8(u8"Kick é"));
+            pads.setNote(19, 127);
+            project.setActiveMap(*data, project.getDrumMachineIndex());
+
+            const auto kit = project.getActiveKit(*data);
+            expectEquals(kit.findArticulation("pad.01")->label, juce::String::fromUTF8(u8"Kick é"));
+            expectEquals(kit.findArticulation("pad.01")->primaryNoteBinding()->midi, 24);
+            expectEquals(kit.findArticulation("pad.20")->primaryNoteBinding()->midi, 127);
+            const int padRow = project.storageRowForCanonical(project.findCanonicalRow("pad.20"));
+            expectEquals(static_cast<int>(data->getLayer(0)->getCurNote(padRow)), 127);
+
+            // Names are cut on a character boundary.
+            juce::String longName;
+            for (int i = 0; i < 40; ++i)
+                longName << juce::String::fromUTF8(u8"é");
+            pads.setName(1, longName);
+            expect(pads.getName(1).getNumBytesAsUTF8() < static_cast<size_t>(GGD_PAD_NAME_BYTES));
+            expect(longName.startsWith(pads.getName(1)));
+            pads.setName(1, "   ");
+            expectEquals(pads.getDisplayName(1), juce::String("Pad 2"));
+        }
+
+        beginTest("Drum machine pads round-trip through the project file");
+        {
+            GgdProject project;
+            auto data = std::make_unique<SequenceData>();
+            project.normalise(*data);
+            auto& pads = data->getDrumMachine();
+            pads.setPadCount(24);
+            pads.setNote(3, 60);
+            pads.setName(3, juce::String::fromUTF8(u8"Clap \U0001F44F"));
+            pads.setName(23, "Last");
+            project.setActiveMap(*data, project.getDrumMachineIndex());
+
+            SeqPersist writer;
+            auto xml = juce::parseXML(writer.store(data.get()).toString());
+            auto restored = std::make_unique<SequenceData>();
+            SeqPersist reader;
+            expect(reader.retrieve(restored.get(), xml.get()));
+            project.normalise(*restored);
+            expect(restored->getDrumMachine() == pads);
+            expectEquals(project.getActiveMapIndex(*restored), project.getDrumMachineIndex());
+            const int row = project.storageRowForCanonical(project.findCanonicalRow("pad.04"));
+            expectEquals(static_cast<int>(restored->getLayer(0)->getCurNote(row)), 60);
+        }
+
+        beginTest("MIDI files import onto pads by note number");
+        {
+            GgdProject project;
+            auto data = std::make_unique<SequenceData>();
+            project.normalise(*data);
+            data->getDrumMachine().setNote(1, 40);
+            project.setActiveMap(*data, project.getDrumMachineIndex());
+
+            juce::MidiMessageSequence track;
+            track.addEvent(juce::MidiMessage::noteOn(10, 36, static_cast<juce::uint8>(100)), 0.0);
+            track.addEvent(juce::MidiMessage::noteOff(10, 36), 60.0);
+            track.addEvent(juce::MidiMessage::noteOn(10, 40, static_cast<juce::uint8>(90)), 480.0);
+            track.addEvent(juce::MidiMessage::noteOff(10, 40), 540.0);
+            track.addEvent(juce::MidiMessage::noteOn(10, 90, static_cast<juce::uint8>(90)), 960.0);
+            track.addEvent(juce::MidiMessage::noteOff(10, 90), 1020.0);
+            juce::MidiFile midi;
+            midi.setTicksPerQuarterNote(480);
+            midi.addTrack(track);
+            const auto file = juce::File::createTempFile(".mid");
+            {
+                juce::FileOutputStream out(file);
+                expect(out.openedOk() && midi.writeTo(out));
+            }
+
+            const auto result = GgdMidiImporter::parseFile(file, project.getActiveKit(*data), project.getCanonicalRows(),
+                                                           GGD_MAX_PATTERN_TICKS);
+            file.deleteFile();
+            expect(result.ok, result.error);
+            expectEquals(result.formatName, juce::String("MIDI notes"));
+            expectEquals(static_cast<int>(result.events.size()), 2);
+            expectEquals(result.unresolvedNotes, 1);
+            if (result.events.size() == 2)
+            {
+                expectEquals(result.events[0].canonicalRow, project.findCanonicalRow("pad.01"));
+                expectEquals(result.events[1].canonicalRow, project.findCanonicalRow("pad.02"));
+                expectEquals(result.events[1].tick, GGD_EVENT_PPQ);
+            }
         }
     }
 };

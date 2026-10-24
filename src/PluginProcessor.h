@@ -63,6 +63,12 @@ public:
 
    // reset to "as assigned" (e.g. when playback stops)
    void reset();
+
+   // Audio-thread half of reset(): applies the default locally without
+   // calling into the host. Follow up with notifyHostOfReset() on the
+   // message thread (CLAP forbids host parameter callbacks from audio).
+   void resetWithoutNotifyingHost();
+   void notifyHostOfReset();
 };
 
 // Inherited manual playback parameter (manual / stop / play). Stochas GGD
@@ -84,7 +90,7 @@ public:
    SeqPlaybackParameter() : AudioProcessorParameter(1), mValue(0) {}
 };
 
-class SeqAudioProcessor  : public AudioProcessor, public AutParamNotify
+class SeqAudioProcessor  : public AudioProcessor, public AutParamNotify, private AsyncUpdater
 {
 public:
    SeqAudioProcessor();
@@ -148,6 +154,8 @@ private:
    double mStandaloneStartMs = 0.0;
 
    void addAutParam(SeqAudioProcessorParameter *p);
+   // Tells the host about automation parameters the audio thread reset.
+   void handleAsyncUpdate() override;
    bool readTransport(GgdTimeline::HostPosition &host, bool &playing, int numSamples);
    void handleUIMessages(const SequenceData &data, MidiBuffer &output);
    std::uint64_t nextRandomSeed();

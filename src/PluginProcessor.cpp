@@ -67,7 +67,10 @@ SeqAudioProcessor::SeqAudioProcessor()
    mStandaloneStartMs = Time::getMillisecondCounterHiRes();
 }
 
-SeqAudioProcessor::~SeqAudioProcessor() = default;
+SeqAudioProcessor::~SeqAudioProcessor()
+{
+   cancelPendingUpdate();
+}
 
 const String SeqAudioProcessor::getName() const
 {
@@ -253,7 +256,9 @@ void SeqAudioProcessor::processBlock(AudioBuffer<float>& buffer, MidiBuffer& mid
          // Automation overrides only last while the transport runs.
          for (auto *parameter : mAutomationParameters)
             if (!parameter->isAssigned())
-               parameter->reset();
+               parameter->resetWithoutNotifyingHost();
+         // The host hears about it from the message thread.
+         triggerAsyncUpdate();
       }
    }
    else {
@@ -414,6 +419,26 @@ void SeqAudioProcessorParameter::reset()
    beginChangeGesture();
    setValueNotifyingHost(getDefaultValue());
    endChangeGesture();
+}
+
+void SeqAudioProcessorParameter::resetWithoutNotifyingHost()
+{
+   setValue(getDefaultValue());
+}
+
+void SeqAudioProcessorParameter::notifyHostOfReset()
+{
+   // Report the current value rather than the default in case the host has
+   // automated the parameter again since the audio thread reset it.
+   beginChangeGesture();
+   sendValueChangedMessageToListeners(getValue());
+   endChangeGesture();
+}
+
+void SeqAudioProcessor::handleAsyncUpdate()
+{
+   for (auto *parameter : mAutomationParameters)
+      parameter->notifyHostOfReset();
 }
 
 //==========implement AutParamNotify ============================
